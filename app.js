@@ -86,9 +86,10 @@ function configureSetup(status) {
     $('#setupKeyField').classList.remove('hidden');
     $('#setupKey').required = true;
     $('#loginFoot').textContent = 'Copy the one-time setup key from your hosting dashboard. This protects the workspace until you create its first administrator.';
+  } else {
+    $('#loginFoot').textContent = 'This one-time setup is available only until the first administrator account is created.';
   }
   $('#loginSubmit').textContent = 'Create administrator account';
-  $('#loginFoot').textContent = 'This one-time setup is available only until the first administrator account is created.';
 }
 function total(entries) { return entries.reduce((sum, entry) => sum + elapsed(entry), 0); }
 
@@ -102,7 +103,7 @@ function paintMetrics() {
   const cards = [
     ['Team hours', hours(allSeconds), `${monthTitle(currentMonth())} · all members`, '◷'],
     ['Hours today', hours(total(today)), `${today.length} entries logged today`, '◴'],
-    ['My hours', hours(total(mine)), `${me.name.split(' ')[0]} · this month`, '♙'],
+    ['My hours', hours(total(mine)), `${escapeHtml(me.name.split(' ')[0])} · this month`, '♙'],
     ['Team target', `${progress}%`, `${hours(allSeconds)} of ${hours(targetHours * 3600)} monthly guide`, '↗'],
   ];
   $('#metrics').innerHTML = cards.map((card) => `<article class="metric"><div class="metric-label"><span>${card[0]}</span><i class="metric-ico">${card[3]}</i></div><div class="metric-value">${card[1]}</div><div class="metric-foot">${card[2]}</div></article>`).join('');
