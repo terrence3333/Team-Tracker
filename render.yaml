@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: tepu-solutions-team-tracker
+    runtime: docker
+    region: singapore
+    plan: 0.5c-512mb
+    healthCheckPath: /healthz
+    autoDeploy: true
+    disk:
+      name: tepu-tracker-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: TEPU_HOST
+        value: 0.0.0.0
+      - key: TEPU_PORT
+        value: 10000
+      - key: TEPU_DB_PATH
+        value: /data/tepu_tracker.sqlite3
+      - key: TEPU_SETUP_KEY
+        generateValue: true
+
