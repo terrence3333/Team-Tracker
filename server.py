@@ -22,10 +22,11 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parent
 DB_PATH = Path(os.environ.get("TEPU_DB_PATH", ROOT / "tepu_tracker.sqlite3"))
 HOST = os.environ.get("TEPU_HOST", "127.0.0.1")
-PORT = int(os.environ.get("TEPU_PORT", "8000"))
+PORT = int(os.environ.get("TEPU_PORT", os.environ.get("PORT", "8000")))
 PBKDF2_ROUNDS = 310_000
 SESSION_DAYS = 14
 MAX_BODY = 64_000
+SETUP_KEY = os.environ.get("TEPU_SETUP_KEY", "")
 
 
 @contextmanager
@@ -209,7 +210,8 @@ class Handler(BaseHTTPRequestHandler):
             with connect() as con:
                 count = con.execute("SELECT COUNT(*) n FROM members").fetchone()["n"]
             member = self.current_member()
-            return self.send_json({"setup_required": count == 0, "member": public_member(member) if member else None})
+            return self.send_json({"setup_required": count == 0, "setup_requires_key": bool(SETUP_KEY),
+                "member": public_member(member) if member else None})
         if parsed.path == "/api/me":
             member = self.current_member()
             return self.send_json({"member": public_member(member) if member else None})
@@ -264,6 +266,9 @@ class Handler(BaseHTTPRequestHandler):
         try:
             data = self.body()
             if path == "/api/setup":
+                supplied_key = str(data.get("setup_key", ""))
+                if SETUP_KEY and not hmac.compare_digest(supplied_key, SETUP_KEY):
+                    return self.send_json({"error": "Enter the one-time setup key from your hosting dashboard."}, HTTPStatus.FORBIDDEN)
                 values = validated_member(data.get("name"), data.get("email"), data.get("password"), "admin")
                 with connect() as con:
                     con.execute("BEGIN IMMEDIATE")
