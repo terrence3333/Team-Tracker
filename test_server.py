@@ -17,6 +17,7 @@ class TrackerApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         tracker.DB_PATH = Path(self.temp.name) / "test.sqlite3"
+        tracker.SETUP_KEY = ""
         tracker.init_db()
         self.httpd = tracker.ThreadingHTTPServer(("127.0.0.1", 0), tracker.Handler)
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
@@ -68,6 +69,16 @@ class TrackerApiTests(unittest.TestCase):
         self.request("/api/data?month=2026-13", None, 400)
         self.request("/api/timer/start", {"project":"Test","date":"2026-02-30","start":"99:99"}, 400)
         self.request("/api/timer/start", {"project":"Test","date":"2026-11-08","start":"99:99"}, 400)
+
+    def test_remote_first_run_requires_setup_key(self):
+        tracker.SETUP_KEY = "one-time-bootstrap-secret"
+        self.assertTrue(self.request("/api/status")["setup_requires_key"])
+        payload = {"name":"Tepu Admin","email":"admin@example.com","password":"a-long-test-password"}
+        self.request("/api/setup", payload, 403)
+        payload["setup_key"] = "incorrect"
+        self.request("/api/setup", payload, 403)
+        payload["setup_key"] = "one-time-bootstrap-secret"
+        self.request("/api/setup", payload, 201)
 
 
 if __name__ == "__main__":
