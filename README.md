@@ -2,6 +2,14 @@
 
 A small, shared team time tracker. It uses a Python standard-library HTTP server and SQLite, so it does not need Node.js or third-party packages.
 
+## Deploy on Render
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/terrence3333/Team-Tracker)
+
+The included Render Blueprint uses a Singapore web service and a 1 GB persistent disk for the SQLite database. Current listed pricing is about **$7/month for the small web service plus $0.25/month for the disk**, before taxes and currency conversion. Render requires a paid web service for persistent disks; its free service filesystem is temporary, so it is not suitable for this database. See [Render pricing](https://render.com/pricing), [persistent disk behavior](https://render.com/docs/disks), and [Blueprint configuration](https://render.com/docs/blueprint-spec).
+
+After Render deploys, open the service URL and copy the generated `TEPU_SETUP_KEY` from the service's Environment page into the first-run setup form. This prevents someone else from claiming the public workspace before you. Create the administrator account, then add employee accounts in the Productivity snapshot panel. Keep the database disk attached; it stores all member accounts and time entries.
+
 ## Start on Windows
 
 1. Install Python 3.10 or newer.
