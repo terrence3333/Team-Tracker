@@ -1,34 +1,54 @@
-# Tepu Solutions time tracker
+# Tepu Solutions team time tracker
 
-A small, shared team time tracker. It uses a Python standard-library HTTP server and SQLite, so it does not need Node.js or third-party packages.
+A shared time tracker for Tepu Solutions Limited. Employees sign in with individual accounts, start and stop work timers, and view daily and monthly team hours. The hosted version uses Netlify Functions for the API and Supabase Postgres for persistent shared data.
 
-## Deploy on Render
+## Deploy to Netlify
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/terrence3333/Team-Tracker)
+The repository is configured for Netlify. Import [terrence3333/Team-Tracker](https://github.com/terrence3333/Team-Tracker) in Netlify, keep the build command `npm run build` and publish directory `dist`, then deploy. Netlify builds the static interface and the serverless `/api/*` backend from the same repository.
 
-The included Render Blueprint uses a Singapore web service and a 1 GB persistent disk for the SQLite database. Current listed pricing is about **$7/month for the small web service plus $0.25/month for the disk**, before taxes and currency conversion. Render requires a paid web service for persistent disks; its free service filesystem is temporary, so it is not suitable for this database. See [Render pricing](https://render.com/pricing), [persistent disk behavior](https://render.com/docs/disks), and [Blueprint configuration](https://render.com/docs/blueprint-spec).
+### Connect the database
 
-After Render deploys, open the service URL and copy the generated `TEPU_SETUP_KEY` from the service's Environment page into the first-run setup form. This prevents someone else from claiming the public workspace before you. Create the administrator account, then add employee accounts in the Productivity snapshot panel. Keep the database disk attached; it stores all member accounts and time entries.
+1. Create or choose a Supabase project for this tracker.
+2. In Supabase SQL Editor, run [`supabase/migrations/20261108000000_team_tracker.sql`](supabase/migrations/20261108000000_team_tracker.sql). It creates the tracker-prefixed tables and enables row level security.
+3. In Netlify site settings, add these environment variables for Functions (or all scopes):
 
-## Start on Windows
+   | Name | Value |
+   | --- | --- |
+   | `SUPABASE_URL` | The project URL from Supabase API settings |
+   | `SUPABASE_SECRET_KEY` | A Supabase secret key; keep it private and server-side |
+   | `TEPU_SETUP_KEY` | A long, random value used once to protect initial admin setup |
+
+   The legacy `SUPABASE_SERVICE_ROLE_KEY` is accepted as a fallback, but a Supabase secret key is preferred. Do not put either key in `index.html`, `app.js`, or any other browser code.
+
+4. Trigger a redeploy after adding the variables. Open the Netlify site, enter the setup key and create the administrator account. Then sign in and create each employee profile from the Productivity snapshot panel.
+
+The setup key is needed only to create the first administrator. Store it in a password manager and do not share it with employees. Employee passwords are stored as salted PBKDF2 hashes; session tokens are stored as hashes and sent in secure, HTTP-only cookies.
+
+## Local development
 
 1. Install Python 3.10 or newer.
 2. Run `run.bat` (or run `py -3 server.py` from this folder).
-3. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The first visitor creates the workspace administrator in the setup screen. Use a unique password with at least 10 characters.
-4. Sign in as the administrator and add employee accounts from the Productivity snapshot panel. Share the initial password privately; employees can sign in individually and start their own timers.
+3. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). Create the first admin account, then add employee accounts from the Productivity snapshot panel.
 
-The default server listens on this computer only. To let other devices reach it, host it on a private team server with `TEPU_HOST=0.0.0.0` and `TEPU_PORT=8000`, then put an HTTPS reverse proxy in front of it. In PowerShell, set those values with `$env:TEPU_HOST="0.0.0.0"` and `$env:TEPU_PORT="8000"` before `py -3 server.py`. Do not expose the built-in HTTP server directly to the public internet. The SQLite database is created beside `server.py`; the included `.gitignore` keeps it out of Git. Keep regular backups of `tepu_tracker.sqlite3`.
+The local Python server stores its data in `tepu_tracker.sqlite3` beside `server.py`. Keep this file private and back it up. Local development and Netlify use separate databases; the Netlify deployment starts with a new Supabase database.
 
-## Included
+## Verify changes locally
 
-- Individual email and password accounts, with administrator/member roles.
-- Passwords hashed with PBKDF2-HMAC-SHA256 and random salts; session tokens are stored hashed and sent in HttpOnly, SameSite cookies.
-- Start and stop timer actions with member, description, project, and date.
-- Shared daily and monthly hours, team member summaries, and recent entries.
-- SQLite persistence across server restarts.
-- First-run admin setup from the browser; the setup endpoint locks after the first account is created.
-- A health check at `/healthz` for host monitoring.
-- Automated API integration checks: run `py -3 -m unittest -v test_server.py`.
+```powershell
+py -3 -m unittest -v test_server.py
+node --check app.js
+npm install
+npm run build
+```
 
-This is a lightweight internal app. It has no password reset, invitation email, payroll export, leave calendar, or multi-factor authentication. Use a managed HTTPS reverse proxy for team deployment and restrict access to the Tepu network.
+## Features
+
+- Individual employee accounts and administrator/member roles.
+- Start and stop timers with project, description, date, and time.
+- Daily and monthly team totals, employee summaries, and recent sessions.
+- Shared Supabase storage for the hosted deployment.
+- Secure first-admin setup and session handling.
+- Local Python/SQLite development mode.
+
+The tracker does not currently include password reset emails, payroll exports, leave tracking, or multi-factor authentication.
 
