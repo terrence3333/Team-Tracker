@@ -6,11 +6,10 @@ A small, shared team time tracker. It uses a Python standard-library HTTP server
 
 1. Install Python 3.10 or newer.
 2. Run `run.bat` (or run `py -3 server.py` from this folder).
-3. On the first start, create the workspace administrator account in the console. Passwords must be at least 10 characters.
-4. Open [http://127.0.0.1:8000](http://127.0.0.1:8000) and sign in.
-5. As the administrator, add each team member from the Productivity snapshot panel. Give each person their account details privately; members can then sign in individually.
+3. Open [http://127.0.0.1:8000](http://127.0.0.1:8000). The first visitor creates the workspace administrator in the setup screen. Use a unique password with at least 10 characters.
+4. Sign in as the administrator and add employee accounts from the Productivity snapshot panel. Share the initial password privately; employees can sign in individually and start their own timers.
 
-The default server listens on this computer only. To let other devices reach it, run it on a private team server with `TEPU_HOST=0.0.0.0` and `TEPU_PORT=8000`, then put an HTTPS reverse proxy in front of it. In PowerShell, set those values with `$env:TEPU_HOST="0.0.0.0"` and `$env:TEPU_PORT="8000"` before `py -3 server.py`. Do not expose the built-in HTTP server directly to the public internet. The SQLite database is created beside `server.py`; keep regular backups of `tepu_tracker.sqlite3`.
+The default server listens on this computer only. To let other devices reach it, host it on a private team server with `TEPU_HOST=0.0.0.0` and `TEPU_PORT=8000`, then put an HTTPS reverse proxy in front of it. In PowerShell, set those values with `$env:TEPU_HOST="0.0.0.0"` and `$env:TEPU_PORT="8000"` before `py -3 server.py`. Do not expose the built-in HTTP server directly to the public internet. The SQLite database is created beside `server.py`; the included `.gitignore` keeps it out of Git. Keep regular backups of `tepu_tracker.sqlite3`.
 
 ## Included
 
@@ -19,6 +18,9 @@ The default server listens on this computer only. To let other devices reach it,
 - Start and stop timer actions with member, description, project, and date.
 - Shared daily and monthly hours, team member summaries, and recent entries.
 - SQLite persistence across server restarts.
+- First-run admin setup from the browser; the setup endpoint locks after the first account is created.
+- A health check at `/healthz` for host monitoring.
+- Automated API integration checks: run `py -3 -m unittest -v test_server.py`.
 
-This is a lightweight internal MVP. It has no password reset, invitation email, payroll export, leave calendar, or multi-factor authentication. Use a managed HTTPS reverse proxy for a team deployment and restrict access to the Tepu network.
+This is a lightweight internal app. It has no password reset, invitation email, payroll export, leave calendar, or multi-factor authentication. Use a managed HTTPS reverse proxy for team deployment and restrict access to the Tepu network.
 
