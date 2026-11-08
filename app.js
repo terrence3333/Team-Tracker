@@ -73,7 +73,7 @@ function enterApp(member) {
   setMonthOptions();
 }
 function showAuthError(message) { $('#loginError').textContent = message; }
-function configureSetup() {
+function configureSetup(status) {
   setupRequired = true;
   $('#authTitle').textContent = 'Set up your workspace';
   $('#authText').textContent = 'Create the Tepu Solutions administrator account to get started.';
@@ -82,6 +82,11 @@ function configureSetup() {
   $('#adminName').required = true;
   $('#confirmPassword').required = true;
   $('#password').autocomplete = 'new-password';
+  if (status.setup_requires_key) {
+    $('#setupKeyField').classList.remove('hidden');
+    $('#setupKey').required = true;
+    $('#loginFoot').textContent = 'Copy the one-time setup key from your hosting dashboard. This protects the workspace until you create its first administrator.';
+  }
   $('#loginSubmit').textContent = 'Create administrator account';
   $('#loginFoot').textContent = 'This one-time setup is available only until the first administrator account is created.';
 }
@@ -207,13 +212,14 @@ $('#loginForm').addEventListener('submit', async (event) => {
     let result;
     if (setupRequired) {
       if ($('#password').value !== $('#confirmPassword').value) throw new Error('The passwords do not match.');
-      result = await api('/api/setup', { method: 'POST', body: JSON.stringify({ name: $('#adminName').value, email: $('#email').value, password: $('#password').value }) });
+      result = await api('/api/setup', { method: 'POST', body: JSON.stringify({ name: $('#adminName').value, email: $('#email').value, password: $('#password').value, setup_key: $('#setupKey').value }) });
     } else {
       result = await api('/api/login', { method: 'POST', body: JSON.stringify({ email: $('#email').value, password: $('#password').value }) });
     }
     await openDashboard(result.member);
     $('#password').value = '';
     $('#confirmPassword').value = '';
+      $('#setupKey').value = '';
   } catch (error) { showAuthError(error.message); }
   finally { button.disabled = false; }
 });
@@ -251,7 +257,7 @@ async function init() {
   try {
     const status = await api('/api/status');
     if (status.setup_required) {
-      configureSetup();
+      configureSetup(status);
     } else if (status.member) {
       await openDashboard(status.member);
     }
