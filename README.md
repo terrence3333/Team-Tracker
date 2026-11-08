@@ -6,6 +6,8 @@ A shared time tracker for Tepu Solutions Limited. Employees sign in with individ
 
 The repository is configured for Netlify. Import [terrence3333/Team-Tracker](https://github.com/terrence3333/Team-Tracker) in Netlify, keep the build command `npm run build` and publish directory `dist`, then deploy. Netlify builds the static interface and the serverless `/api/*` backend from the same repository.
 
+[Deploy this repository to Netlify](https://app.netlify.com/start/deploy?repository=https://github.com/terrence3333/Team-Tracker)
+
 ### Connect the database
 
 1. Create or choose a Supabase project for this tracker.
