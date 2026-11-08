@@ -1,0 +1,6 @@
+tepu_tracker.sqlite3
+tepu_tracker.sqlite3-shm
+tepu_tracker.sqlite3-wal
+*.log
+__pycache__/
+
