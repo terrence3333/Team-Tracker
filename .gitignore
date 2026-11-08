@@ -3,4 +3,6 @@ tepu_tracker.sqlite3-shm
 tepu_tracker.sqlite3-wal
 *.log
 __pycache__/
+node_modules/
+dist/
 
