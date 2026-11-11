@@ -4,7 +4,7 @@ import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual, randomUUID } from
 const PASSWORD_ROUNDS = 310_000;
 const SESSION_DAYS = 14;
 const SESSION_COOKIE = 'tepu_session';
-const TABLES = { members: 'tracker_members', sessions: 'tracker_sessions', entries: 'tracker_entries' };
+const TABLES = { members: 'tracker_members', sessions: 'tracker_sessions', entries: 'tracker_entries', projects: 'tracker_projects', roles: 'tracker_work_roles' };
 
 function reply(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -38,7 +38,7 @@ function sameSecret(actual, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 function publicMember(member) {
-  return { id: member.id, name: member.name, email: member.email, role: member.role };
+  return { id: member.id, name: member.name, email: member.email, role: member.role, job_role: member.job_role || '' };
 }
 function validateMember(name, email, password) {
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 100) return 'Enter a name up to 100 characters.';
@@ -86,8 +86,14 @@ async function currentMember(db, request) {
     .select('member_id,expires_at').eq('token_hash', hashToken(token)).gt('expires_at', new Date().toISOString()).maybeSingle();
   if (sessionError || !session) return null;
   const { data: member, error } = await db.from(TABLES.members)
-    .select('id,name,email,role').eq('id', session.member_id).maybeSingle();
+    .select('id,name,email,role,job_role').eq('id', session.member_id).maybeSingle();
   return error ? null : member;
+}
+
+function isAdmin(member) { return member?.role === 'admin'; }
+async function activeCatalogItem(db, table, name) {
+  const { data, error } = await db.from(table).select('*').eq('name', name).eq('active', true).maybeSingle();
+  return error ? null : data;
 }
 
 async function createSession(db, memberId) {
@@ -116,31 +122,54 @@ async function handle(request, db, setupKey) {
     const member = await currentMember(db, request);
     return reply({ member: member ? publicMember(member) : null });
   }
+  if (request.method === 'GET' && path === '/api/catalog') {
+    const member = await currentMember(db, request);
+    if (!member) return reply({ error: 'Please sign in to continue.' }, 401);
+    const includeArchived = isAdmin(member);
+    const projectQuery = db.from(TABLES.projects).select('id,name,project_type,active').order('name');
+    const roleQuery = db.from(TABLES.roles).select('id,name,active').order('name');
+    if (!includeArchived) { projectQuery.eq('active', true); roleQuery.eq('active', true); }
+    const [{ data: projects, error: projectError }, { data: roles, error: roleError }] = await Promise.all([projectQuery, roleQuery]);
+    if (projectError || roleError) return reply({ error: 'Could not load project and role options.' }, 500);
+    return reply({ projects: projects || [], roles: roles || [] });
+  }
   if (request.method === 'GET' && path === '/api/data') {
     const member = await currentMember(db, request);
     if (!member) return reply({ error: 'Please sign in to continue.' }, 401);
-    const range = monthRange(url.searchParams.get('month'));
-    if (!range) return reply({ error: 'Choose a valid reporting month.' }, 400);
+    let start = url.searchParams.get('start'), end = url.searchParams.get('end');
+    if (!start && !end) {
+      const legacyRange = monthRange(url.searchParams.get('month'));
+      if (!legacyRange) return reply({ error: 'Choose a valid reporting date range.' }, 400);
+      start = legacyRange.start;
+      end = new Date(`${legacyRange.end}T00:00:00.000Z`);
+      end.setUTCDate(end.getUTCDate() - 1);
+      end = end.toISOString().slice(0, 10);
+    }
+    if (!validDate(start) || !validDate(end) || start > end) return reply({ error: 'Choose a valid reporting date range.' }, 400);
+    let entriesQuery = db.from(TABLES.entries).select('*').gte('work_date', start).lte('work_date', end).order('started_at', { ascending: false }).limit(5000);
+    if (!isAdmin(member)) entriesQuery = entriesQuery.eq('member_id', member.id);
+    const membersQuery = db.from(TABLES.members).select('id,name,email,role,job_role').order('name', { ascending: true });
+    if (!isAdmin(member)) membersQuery.eq('id', member.id);
+    let activeQuery = db.from(TABLES.entries).select('id,member_id,description,project,project_id,project_type,work_role,work_date,start_clock,started_at').is('ended_at', null);
+    if (!isAdmin(member)) activeQuery = activeQuery.eq('member_id', member.id);
     const [{ data: rows, error: entriesError }, { data: users, error: membersError }, { data: active, error: activeError }] = await Promise.all([
-      db.from(TABLES.entries).select('*').gte('work_date', range.start).lt('work_date', range.end).order('started_at', { ascending: false }).limit(5000),
-      db.from(TABLES.members).select('id,name,email,role').order('name', { ascending: true }),
-      db.from(TABLES.entries).select('id,description,project,work_date,start_clock,started_at').eq('member_id', member.id).is('ended_at', null).limit(1).maybeSingle(),
+      entriesQuery, membersQuery, activeQuery.order('started_at', { ascending: true }).limit(500),
     ]);
     if (entriesError || membersError || activeError) return reply({ error: 'Could not load tracker data.' }, 500);
     const memberNames = new Map(users.map((user) => [user.id, user.name]));
     const now = Date.now();
     const entries = rows.map((row) => ({
       id: row.id, member_id: row.member_id, member_name: memberNames.get(row.member_id) || 'Team member',
-      description: row.description, project: row.project, date: row.work_date, start: String(row.start_clock).slice(0, 5),
+      description: row.description, project: row.project, project_id: row.project_id || '', project_type: row.project_type || '', work_role: row.work_role || '', date: row.work_date, start: String(row.start_clock).slice(0, 5),
       started_at: Math.floor(new Date(row.started_at).getTime() / 1000),
       ended_at: row.ended_at, seconds: row.seconds ?? Math.max(0, Math.floor((now - new Date(row.started_at).getTime()) / 1000)),
       running: row.ended_at === null,
     }));
-    const timer = active ? { id: active.id, description: active.description, project: active.project,
-      date: active.work_date, start: String(active.start_clock).slice(0, 5), started_at: Math.floor(new Date(active.started_at).getTime() / 1000) } : null;
-    return reply({ member: publicMember(member), members: users.map(publicMember), entries, timer });
+    const activeTimers = active.map((row) => ({ id: row.id, member_id: row.member_id, member_name: memberNames.get(row.member_id) || 'Team member', description: row.description, project: row.project, project_id: row.project_id || '', project_type: row.project_type || '', work_role: row.work_role || '', date: row.work_date, start: String(row.start_clock).slice(0, 5), started_at: Math.floor(new Date(row.started_at).getTime() / 1000) }));
+    const timer = activeTimers.find((row) => row.member_id === member.id) || null;
+    return reply({ member: publicMember(member), members: users.map(publicMember), entries, timer, active_timers: activeTimers });
   }
-  if (request.method !== 'POST') return reply({ error: 'Not found.' }, 404);
+  if (!['POST', 'PATCH'].includes(request.method)) return reply({ error: 'Not found.' }, 404);
   if (!verifyOrigin(request)) return reply({ error: 'Request origin is not allowed.' }, 403);
 
   let body;
@@ -185,16 +214,40 @@ async function handle(request, db, setupKey) {
   const member = await currentMember(db, request);
   if (!member) return reply({ error: 'Please sign in to continue.' }, 401);
 
+  if (request.method === 'PATCH' && path === '/api/profile') {
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    if (!name || name.length > 100 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) return reply({ error: 'Enter a valid name and email address.' }, 400);
+    const update = { name, email };
+    if (body.new_password) {
+      if (typeof body.current_password !== 'string' || typeof body.new_password !== 'string' || body.new_password.length < 10 || body.new_password.length > 200) return reply({ error: 'Enter your current password and choose a new password of at least 10 characters.' }, 400);
+      const { data: credentials, error: credentialError } = await db.from(TABLES.members).select('password_salt,password_hash').eq('id', member.id).single();
+      if (credentialError || !sameSecret(passwordHash(body.current_password, credentials.password_salt), credentials.password_hash)) return reply({ error: 'Current password is incorrect.' }, 403);
+      const salt = randomBytes(16).toString('hex');
+      update.password_salt = salt;
+      update.password_hash = passwordHash(body.new_password, salt);
+    }
+    const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', member.id).select('id,name,email,role,job_role').single();
+    if (error) return reply({ error: error.code === '23505' ? 'That email address is already in use.' : 'Could not update your profile.' }, error.code === '23505' ? 409 : 500);
+    return reply({ member: publicMember(updated) });
+  }
+
   if (path === '/api/timer/start') {
     const description = String(body.description || '').trim().slice(0, 160);
     const project = String(body.project || '').trim().slice(0, 100);
+    const projectId = String(body.project_id || '').trim().slice(0, 100);
+    const projectType = String(body.project_type || '').trim().slice(0, 80);
+    const workRole = String(body.work_role || '').trim().slice(0, 80);
     const workDate = body.date;
     const start = body.start;
-    if (!project || !validDate(workDate) || typeof start !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(start)) {
-      return reply({ error: 'Add a project and use a valid date and start time.' }, 400);
+    if (!projectId || !project || !projectType || !workRole || !validDate(workDate) || typeof start !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(start)) {
+      return reply({ error: 'Add a project ID, choose a project and role, and use a valid date and start time.' }, 400);
     }
+    const [projectOption, roleOption] = await Promise.all([activeCatalogItem(db, TABLES.projects, project), activeCatalogItem(db, TABLES.roles, workRole)]);
+    if (!projectOption || projectOption.project_type !== projectType) return reply({ error: 'That project is not available. Refresh the project list and try again.' }, 400);
+    if (!roleOption) return reply({ error: 'That work role is not available. Refresh the role list and try again.' }, 400);
     const { data: entry, error } = await db.from(TABLES.entries).insert({
-      member_id: member.id, description: description || project, project, work_date: workDate,
+      member_id: member.id, description: description || project, project, project_id: projectId, project_type: projectType, work_role: workRole, work_date: workDate,
       start_clock: `${start}:00`, started_at: new Date().toISOString(),
     }).select('id').single();
     if (error) return reply({ error: error.code === '23505' ? 'You already have a timer running. Stop it before starting another.' : 'Could not start the timer.' }, error.code === '23505' ? 409 : 500);
@@ -217,13 +270,41 @@ async function handle(request, db, setupKey) {
     if (member.role !== 'admin') return reply({ error: 'Only an administrator can add team members.' }, 403);
     const validation = validateMember(body.name, body.email, body.password);
     if (validation) return reply({ error: validation }, 400);
+    const jobRole = String(body.job_role || '').trim().slice(0, 80);
+    if (jobRole && !await activeCatalogItem(db, TABLES.roles, jobRole)) return reply({ error: 'Choose an active work role from the list.' }, 400);
     const salt = randomBytes(16).toString('hex');
     const { data: created, error } = await db.from(TABLES.members).insert({
       name: body.name.trim(), email: body.email.trim().toLowerCase(), role: 'member',
-      password_salt: salt, password_hash: passwordHash(body.password, salt),
+      job_role: jobRole, password_salt: salt, password_hash: passwordHash(body.password, salt),
     }).select('id').single();
     if (error) return reply({ error: error.code === '23505' ? 'That email already has an account.' : 'Could not create the team member account.' }, error.code === '23505' ? 409 : 500);
     return reply({ ok: true, id: created.id }, 201);
+  }
+  if (path === '/api/admin/projects' && request.method === 'POST') {
+    if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage projects.' }, 403);
+    const name = String(body.name || '').trim();
+    const projectType = String(body.project_type || '').trim();
+    if (!name || name.length > 100 || !projectType || projectType.length > 80) return reply({ error: 'Enter a project name and project type.' }, 400);
+    const { data: project, error } = await db.from(TABLES.projects).insert({ name, project_type: projectType, active: true }).select('id,name,project_type,active').single();
+    if (error) return reply({ error: error.code === '23505' ? 'A project with that name already exists.' : 'Could not add the project.' }, error.code === '23505' ? 409 : 500);
+    return reply({ project }, 201);
+  }
+  if (path === '/api/admin/roles' && request.method === 'POST') {
+    if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage work roles.' }, 403);
+    const name = String(body.name || '').trim();
+    if (!name || name.length > 80) return reply({ error: 'Enter a work role up to 80 characters.' }, 400);
+    const { data: role, error } = await db.from(TABLES.roles).insert({ name, active: true }).select('id,name,active').single();
+    if (error) return reply({ error: error.code === '23505' ? 'That work role already exists.' : 'Could not add the work role.' }, error.code === '23505' ? 409 : 500);
+    return reply({ role }, 201);
+  }
+  const catalogMatch = path.match(/^\/api\/admin\/(projects|roles)\/([0-9a-f-]{36})$/i);
+  if (catalogMatch && request.method === 'PATCH') {
+    if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage project and role options.' }, 403);
+    if (typeof body.active !== 'boolean') return reply({ error: 'Choose whether this option is active.' }, 400);
+    const table = catalogMatch[1] === 'projects' ? TABLES.projects : TABLES.roles;
+    const { data: updated, error } = await db.from(table).update({ active: body.active }).eq('id', catalogMatch[2]).select('id,active').maybeSingle();
+    if (error || !updated) return reply({ error: 'Could not update that option.' }, 404);
+    return reply({ ok: true, active: updated.active });
   }
   return reply({ error: 'Not found.' }, 404);
 }
