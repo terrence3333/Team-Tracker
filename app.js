@@ -102,7 +102,7 @@ function renderNav(){
 }
 function setPage(page){if(['manage','members'].includes(page)&&me.role!=='admin')return;pageConfig(page);}
 function paintCatalog(){
-  const currentProject=$('#projectName').value;
+  const currentProject=$('#projectName').value||(me?.role==='member'?me.project_name:'');
   $('#projectName').innerHTML='<option value="">Select a project</option>'+catalog.projects.filter(p=>p.active!==false).map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
   const projectTypes=$('#projectTypeOptions');if(projectTypes){const types=[...new Set(['Production',...catalog.projects.map(project=>project.project_type).filter(Boolean)])];projectTypes.innerHTML=types.map(type=>`<option value="${escapeHtml(type)}"></option>`).join('');}
   if(catalog.projects.some(p=>p.name===currentProject))$('#projectName').value=currentProject;
@@ -115,6 +115,7 @@ function paintCatalog(){
   $('#timerButton').disabled=!data.timer&&(!catalog.projects.length||!catalog.roles.length);
   const memberTypes=[...new Set(['Production',...catalog.projects.filter(project=>project.active!==false).map(project=>project.project_type).filter(Boolean)])];
   ['#memberProjectType','#editMemberProjectType'].forEach(selector=>{const typeSelect=$(selector);if(typeSelect){const value=typeSelect.value;typeSelect.innerHTML=memberTypes.map(type=>`<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join('');typeSelect.value=memberTypes.includes(value)?value:'Production';}});
+  ['#memberProjectName','#editMemberProjectName'].forEach(selector=>{const projectSelect=$(selector);if(projectSelect){const value=projectSelect.value;const projects=catalog.projects.filter(project=>project.active!==false);projectSelect.innerHTML='<option value="">Select a project</option>'+projects.map(project=>`<option value="${escapeHtml(project.name)}">${escapeHtml(project.name)}</option>`).join('');if(value&&!projects.some(project=>project.name===value))projectSelect.insertAdjacentHTML('beforeend',`<option value="${escapeHtml(value)}">${escapeHtml(value)} (archived)</option>`);projectSelect.value=value;}});
   ['#memberJobRole','#editMemberRole'].forEach(selector=>{const jobRole=$(selector);if(jobRole){const v=jobRole.value;jobRole.innerHTML='<option value="">No default role</option>'+catalog.roles.filter(r=>r.active!==false).map(r=>`<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join('');if(catalog.roles.some(r=>r.name===v))jobRole.value=v;}});
 }
 function paintMetrics(){
@@ -146,7 +147,7 @@ function renderTeam(){
     $('#teamRows').innerHTML=rows||'<tr><td colspan="5" class="empty">No team members yet.</td></tr>';
   }else{
     $('#teamPanelTitle').textContent='My work summary';$('#teamPanelSub').textContent='Your assignments and hours in this period';$('#memberCount').textContent=me.job_role||'Member';$('#teamHeader').innerHTML='<th>Summary</th><th>Value</th>';
-    const entries=data.entries.filter(e=>e.member_id===me.id);$('#teamRows').innerHTML=`<tr><td><strong>Project type</strong></td><td>${escapeHtml(me.project_type||'Production')}</td></tr><tr><td><strong>Work role</strong></td><td>${escapeHtml(me.job_role||'Not assigned')}</td></tr><tr><td><strong>Tracked hours</strong></td><td>${hours(total(entries))}</td></tr><tr><td><strong>Logged sessions</strong></td><td>${entries.length}</td></tr><tr><td><strong>Projects used</strong></td><td>${new Set(entries.map(e=>e.project)).size}</td></tr>`;
+    const entries=data.entries.filter(e=>e.member_id===me.id);$('#teamRows').innerHTML=`<tr><td><strong>Project name</strong></td><td>${escapeHtml(me.project_name||'Not assigned')}</td></tr><tr><td><strong>Project type</strong></td><td>${escapeHtml(me.project_type||'Production')}</td></tr><tr><td><strong>Work role</strong></td><td>${escapeHtml(me.job_role||'Not assigned')}</td></tr><tr><td><strong>Tracked hours</strong></td><td>${hours(total(entries))}</td></tr><tr><td><strong>Logged sessions</strong></td><td>${entries.length}</td></tr><tr><td><strong>Projects used</strong></td><td>${new Set(entries.map(e=>e.project)).size}</td></tr>`;
   }
 }
 function entryRow(entry,includeDetails=false){
@@ -202,13 +203,16 @@ function paintManage(){
 }
 function paintMemberDirectory(){
   const members=data.members.filter(m=>m.role==='member');
-  $('#membersRows').innerHTML=members.map(m=>`<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.project_type||'Production')}</td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill ${m.active===false?'running':''}">${m.active===false?'Deactivated':'Active'}</span></td><td><button class="soft-btn open-member" data-id="${escapeHtml(m.id)}" type="button">Open profile</button></td><td><button class="soft-btn member-toggle" data-id="${escapeHtml(m.id)}" data-active="${m.active===false?'false':'true'}" type="button">${m.active===false?'Reactivate':'Deactivate'}</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">No team member accounts yet. Create the first account using the form.</td></tr>';
+  $('#membersRows').innerHTML=members.map(m=>`<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.project_name||'—')}</td><td>${escapeHtml(m.project_type||'Production')}</td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill ${m.active===false?'running':''}">${m.active===false?'Deactivated':'Active'}</span></td><td><button class="soft-btn open-member" data-id="${escapeHtml(m.id)}" type="button">Open profile</button></td><td><button class="soft-btn member-toggle" data-id="${escapeHtml(m.id)}" data-active="${m.active===false?'false':'true'}" type="button">${m.active===false?'Reactivate':'Deactivate'}</button></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No team member accounts yet. Create the first account using the form.</td></tr>';
 }
 function openMemberProfile(id){
   const member=data.members.find(m=>m.id===id&&m.role==='member');if(!member)return;
-  const form=$('#memberProfileForm');form.reset();form.elements.id.value=member.id;form.elements.name.value=member.name;form.elements.email.value=member.email;form.elements.project_type.value=member.project_type||'Production';form.elements.job_role.value=member.job_role||'';
+  const form=$('#memberProfileForm');form.reset();form.elements.id.value=member.id;form.elements.name.value=member.name;form.elements.email.value=member.email;
+  const assignedProject=member.project_name||'';const projectSelect=form.elements.project_name;
+  if(assignedProject&&!Array.from(projectSelect.options).some(option=>option.value===assignedProject))projectSelect.insertAdjacentHTML('beforeend',`<option value="${escapeHtml(assignedProject)}">${escapeHtml(assignedProject)} (archived)</option>`);
+  projectSelect.value=assignedProject;form.elements.project_type.value=member.project_type||'Production';form.elements.job_role.value=member.job_role||'';
   const entries=data.entries.filter(e=>e.member_id===member.id);$('#memberDialogTitle').textContent=`${member.name} · profile`;
-  $('#memberProfileSummary').textContent=`${member.active===false?'Deactivated':'Active'} account · ${entries.length} visible time ${entries.length===1?'entry':'entries'} · ${hours(total(entries))} tracked in this date range · Google sign-in uses this work email.`;$('#memberProfileError').textContent='';$('#memberDialog').showModal();
+  $('#memberProfileSummary').textContent=`${member.active===false?'Deactivated':'Active'} account · Assigned project: ${member.project_name||'Not assigned'} · ${entries.length} visible time ${entries.length===1?'entry':'entries'} · ${hours(total(entries))} tracked in this date range · Google sign-in uses this work email.`;$('#memberProfileError').textContent='';$('#memberDialog').showModal();
 }
 async function saveMemberProfile(event){
   event.preventDefault();const form=event.currentTarget,button=event.submitter;button.disabled=true;$('#memberProfileError').textContent='';
@@ -383,4 +387,5 @@ async function init(){
 }
 init();
 setInterval(()=>{if(!me)return;if(data.timer)paintTimer();if(Date.now()-lastRefresh>25000)refresh().catch(showError);},1000);
+
 
