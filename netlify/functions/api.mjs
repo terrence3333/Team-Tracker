@@ -42,7 +42,7 @@ function sameSecret(actual, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 function publicMember(member) {
-  return { id: member.id, name: member.name, email: member.email, role: member.role, job_role: member.job_role || '', project_type: member.project_type || 'Production', active: member.active !== false };
+  return { id: member.id, name: member.name, email: member.email, role: member.role, job_role: member.job_role || '', project_name: member.project_name || '', project_type: member.project_type || 'Production', active: member.active !== false };
 }
 async function audit(db, { actorId = null, targetMemberId = null, action, entityType = 'system', entityId = null, before = null, after = null, metadata = {} }) {
   const { error } = await db.from(TABLES.audit).insert({ actor_member_id: actorId, target_member_id: targetMemberId, action, entity_type: entityType, entity_id: entityId, before_values: before, after_values: after, metadata });
@@ -94,7 +94,7 @@ async function currentMember(db, request) {
     .select('member_id,expires_at').eq('token_hash', hashToken(token)).gt('expires_at', new Date().toISOString()).maybeSingle();
   if (sessionError || !session) return null;
   const { data: member, error } = await db.from(TABLES.members)
-    .select('id,name,email,role,job_role,project_type,active').eq('id', session.member_id).maybeSingle();
+    .select('id,name,email,role,job_role,project_name,project_type,active').eq('id', session.member_id).maybeSingle();
   return error || !member || member.active === false ? null : member;
 }
 
@@ -172,7 +172,7 @@ async function handle(request, db, setupKey) {
     if (!validDate(start) || !validDate(end) || start > end) return reply({ error: 'Choose a valid reporting date range.' }, 400);
     let entriesQuery = db.from(TABLES.entries).select('*').gte('work_date', start).lte('work_date', end).order('started_at', { ascending: false }).limit(5000);
     if (!isAdmin(member)) entriesQuery = entriesQuery.eq('member_id', member.id);
-    const membersQuery = db.from(TABLES.members).select('id,name,email,role,job_role,project_type,active').order('name', { ascending: true });
+    const membersQuery = db.from(TABLES.members).select('id,name,email,role,job_role,project_name,project_type,active').order('name', { ascending: true });
     if (!isAdmin(member)) membersQuery.eq('id', member.id);
     let activeQuery = db.from(TABLES.entries).select('id,member_id,description,project,project_id,project_type,work_role,work_date,start_clock,started_at').is('ended_at', null);
     if (!isAdmin(member)) activeQuery = activeQuery.eq('member_id', member.id);
@@ -263,7 +263,7 @@ async function handle(request, db, setupKey) {
       await audit(db, { action: 'google_login_failed', entityType: 'authentication', metadata: { reason: 'provider_identity_not_verified' } });
       return reply({ error: 'Google could not verify this account. Try again or use your work email and password.' }, 401);
     }
-    const { data: member, error } = await db.from(TABLES.members).select('id,name,email,role,job_role,project_type,active')
+    const { data: member, error } = await db.from(TABLES.members).select('id,name,email,role,job_role,project_name,project_type,active')
       .eq('email', googleUser.email.trim().toLowerCase()).eq('active', true).maybeSingle();
     if (error || !member) {
       await audit(db, { action: 'google_login_denied', entityType: 'authentication', metadata: { email: googleUser.email.trim().toLowerCase(), reason: 'no_active_member_profile' } });
@@ -290,7 +290,7 @@ async function handle(request, db, setupKey) {
       update.password_salt = salt;
       update.password_hash = passwordHash(body.new_password, salt);
     }
-    const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', member.id).select('id,name,email,role,job_role,project_type').single();
+    const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', member.id).select('id,name,email,role,job_role,project_name,project_type').single();
     if (error) return reply({ error: error.code === '23505' ? 'That email address is already in use.' : 'Could not update your profile.' }, error.code === '23505' ? 409 : 500);
     await audit(db, { actorId: member.id, targetMemberId: member.id, action: 'profile_updated', entityType: 'member', entityId: member.id, before: { name: member.name, email: member.email }, after: { name: updated.name, email: updated.email } });
     return reply({ member: publicMember(updated) });
@@ -380,27 +380,30 @@ async function handle(request, db, setupKey) {
     const validation = validateMember(body.name, body.email, body.password);
     if (validation) return reply({ error: validation }, 400);
     const jobRole = String(body.job_role || '').trim().slice(0, 80);
+    const projectName = String(body.project_name || '').trim().slice(0, 100);
     const projectType = String(body.project_type || '').trim().slice(0, 80);
+    if (!projectName || !await activeCatalogItem(db, TABLES.projects, projectName)) return reply({ error: 'Choose an active project name from the list.' }, 400);
     if (!projectType || !await activeProjectType(db, projectType)) return reply({ error: 'Choose an active project type from the list.' }, 400);
     if (jobRole && !await activeCatalogItem(db, TABLES.roles, jobRole)) return reply({ error: 'Choose an active work role from the list.' }, 400);
     const salt = randomBytes(16).toString('hex');
     const { data: created, error } = await db.from(TABLES.members).insert({
       name: body.name.trim(), email: body.email.trim().toLowerCase(), role: 'member',
-      job_role: jobRole, project_type: projectType, password_salt: salt, password_hash: passwordHash(body.password, salt),
+      job_role: jobRole, project_name: projectName, project_type: projectType, password_salt: salt, password_hash: passwordHash(body.password, salt),
     }).select('id').single();
     if (error) return reply({ error: error.code === '23505' ? 'That email already has an account.' : 'Could not create the team member account.' }, error.code === '23505' ? 409 : 500);
-    await audit(db, { actorId: member.id, targetMemberId: created.id, action: 'member_created', entityType: 'member', entityId: created.id, after: { name: body.name.trim(), email: body.email.trim().toLowerCase(), role: 'member', job_role: jobRole, project_type: projectType, active: true } });
+    await audit(db, { actorId: member.id, targetMemberId: created.id, action: 'member_created', entityType: 'member', entityId: created.id, after: { name: body.name.trim(), email: body.email.trim().toLowerCase(), role: 'member', job_role: jobRole, project_name: projectName, project_type: projectType, active: true } });
     return reply({ ok: true, id: created.id }, 201);
   }
   const adminMemberMatch = path.match(/^\/api\/admin\/members\/([0-9a-f-]{36})$/i);
   if (adminMemberMatch && request.method === 'PATCH') {
     if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage team accounts.' }, 403);
-    const { data: prior, error: readError } = await db.from(TABLES.members).select('id,name,email,role,job_role,project_type,active').eq('id', adminMemberMatch[1]).maybeSingle();
+    const { data: prior, error: readError } = await db.from(TABLES.members).select('id,name,email,role,job_role,project_name,project_type,active').eq('id', adminMemberMatch[1]).maybeSingle();
     if (readError || !prior || prior.role === 'admin') return reply({ error: 'Team member account not found.' }, 404);
     const update = {};
     if (typeof body.name === 'string') update.name = body.name.trim();
     if (typeof body.email === 'string') update.email = body.email.trim().toLowerCase();
     if (typeof body.job_role === 'string') update.job_role = body.job_role.trim();
+    if (typeof body.project_name === 'string') update.project_name = body.project_name.trim();
     if (typeof body.project_type === 'string') update.project_type = body.project_type.trim();
     if (typeof body.active === 'boolean') update.active = body.active;
     if (body.password !== undefined) {
@@ -411,9 +414,10 @@ async function handle(request, db, setupKey) {
     }
     if ((update.name !== undefined && (!update.name || update.name.length > 100)) || (update.email !== undefined && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email) || update.email.length > 254))) return reply({ error: 'Enter a valid name and work email.' }, 400);
     if (update.job_role && !await activeCatalogItem(db, TABLES.roles, update.job_role)) return reply({ error: 'Choose an active work role from the list.' }, 400);
+    if (update.project_name !== undefined && (!update.project_name || update.project_name.length > 100 || (update.project_name !== prior.project_name && !await activeCatalogItem(db, TABLES.projects, update.project_name)))) return reply({ error: 'Choose an active project name from the list.' }, 400);
     if (update.project_type !== undefined && (!update.project_type || update.project_type.length > 80 || !await activeProjectType(db, update.project_type))) return reply({ error: 'Choose an active project type from the list.' }, 400);
     if (!Object.keys(update).length) return reply({ error: 'Choose a profile field to update.' }, 400);
-    const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', prior.id).select('id,name,email,role,job_role,project_type,active').single();
+    const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', prior.id).select('id,name,email,role,job_role,project_name,project_type,active').single();
     if (error) return reply({ error: error.code === '23505' ? 'That email is already in use.' : 'Could not update this account.' }, error.code === '23505' ? 409 : 500);
     await audit(db, { actorId: member.id, targetMemberId: prior.id, action: update.active === false ? 'member_deactivated' : update.active === true ? 'member_reactivated' : 'member_profile_updated', entityType: 'member', entityId: prior.id, before: prior, after: updated });
     return reply({ member: publicMember(updated) });
@@ -473,4 +477,5 @@ export default async function handler(request) {
 }
 
 export const config = { path: '/api/*' };
+
 
