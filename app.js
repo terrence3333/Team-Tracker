@@ -87,18 +87,18 @@ function enterApp(member){
 }
 function pageConfig(page){
   const admin=me?.role==='admin';
-  const labels=admin?{overview:['Overview','TEAM WORKSPACE','Your team at a glance'],entries:['Time entries','TEAM RECORDS','Review and export all member time entries'],reports:['Reports','TEAM REPORTING','Compare team hours, projects, and work roles'],manage:['Team & setup','ADMINISTRATION','Manage members, projects, and available work roles']}:{overview:['Overview','MY WORKSPACE','Your timer, hours, and recent activity'],entries:['My time entries','PERSONAL RECORDS','Review and export your time entries'],reports:['My reports','PERSONAL REPORTING','Review your hours by date, project, and role']};
+  const labels=admin?{overview:['Overview','TEAM WORKSPACE','Your team at a glance'],entries:['Time entries','TEAM RECORDS','Review and export all member time entries'],reports:['Reports','TEAM REPORTING','Compare team hours, projects, and work roles'],members:['Team members','ACCOUNT MANAGEMENT','Create accounts and open or update member profiles'],manage:['Project settings','ADMINISTRATION','Manage projects and available work roles']}:{overview:['Overview','MY WORKSPACE','Your timer, hours, and recent activity'],entries:['My time entries','PERSONAL RECORDS','Review and export your time entries'],reports:['My reports','PERSONAL REPORTING','Review your hours by date, project, and role']};
   const [title,eyebrow,sub]=labels[page]||labels.overview;$('#crumbPage').textContent=title;$('#pageTitle').textContent=page==='overview'?`${greeting()}, ${me.name.split(' ')[0]}`:title;$('#pageEyebrow').textContent=eyebrow;$('#pageSub').textContent=sub;
-  ['overview','entries','reports','manage'].forEach(name=>$('#page-'+name).classList.toggle('hidden',name!==page));
+  ['overview','entries','reports','members','manage'].forEach(name=>$('#page-'+name).classList.toggle('hidden',name!==page));
   currentPage=page;
   document.querySelectorAll('.nav-btn').forEach(button=>button.classList.toggle('active',button.dataset.page===page));
   renderCurrentPage();
 }
 function renderNav(){
-  const pages=me.role==='admin'?[['overview','▦','Overview'],['entries','◷','Time entries'],['reports','⌁','Reports'],['manage','⚙','Team & setup']]:[['overview','▦','Overview'],['entries','◷','My time entries'],['reports','⌁','My reports']];
+  const pages=me.role==='admin'?[['overview','▦','Overview'],['entries','◷','Time entries'],['reports','⌁','Reports'],['members','♙','Team members'],['manage','⚙','Project settings']]:[['overview','▦','Overview'],['entries','◷','My time entries'],['reports','⌁','My reports']];
   $('#nav').innerHTML=pages.map(([page,icon,label])=>`<button class="nav-btn" type="button" data-page="${page}"><span class="nav-icon">${icon}</span>${label}</button>`).join('');
 }
-function setPage(page){if(page==='manage'&&me.role!=='admin')return;pageConfig(page);}
+function setPage(page){if(['manage','members'].includes(page)&&me.role!=='admin')return;pageConfig(page);}
 function paintCatalog(){
   const currentProject=$('#projectName').value;
   $('#projectName').innerHTML='<option value="">Select a project</option>'+catalog.projects.filter(p=>p.active!==false).map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
@@ -111,8 +111,7 @@ function paintCatalog(){
   if(catalog.roles.some(r=>r.name===currentRole))$('#workRole').value=currentRole;
   $('#timerNote').textContent=catalog.projects.length&&catalog.roles.length?'Enter the project ID, choose a project, and select your work role.':'Ask your administrator to add a project and work role before starting a timer.';
   $('#timerButton').disabled=!data.timer&&(!catalog.projects.length||!catalog.roles.length);
-  const jobRole=$('#memberJobRole');
-  if(jobRole){const v=jobRole.value;jobRole.innerHTML='<option value="">Select a role</option>'+catalog.roles.filter(r=>r.active!==false).map(r=>`<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join('');if(catalog.roles.some(r=>r.name===v))jobRole.value=v;}
+  ['#memberJobRole','#editMemberRole'].forEach(selector=>{const jobRole=$(selector);if(jobRole){const v=jobRole.value;jobRole.innerHTML='<option value="">No default role</option>'+catalog.roles.filter(r=>r.active!==false).map(r=>`<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join('');if(catalog.roles.some(r=>r.name===v))jobRole.value=v;}});
 }
 function paintMetrics(){
   const entries=data.entries;const mine=entries.filter(e=>e.member_id===me.id);const todayEntries=entries.filter(e=>e.date===localDate());
@@ -197,6 +196,22 @@ function paintManage(){
   }
   paintCatalog();
 }
+function paintMemberDirectory(){
+  const members=data.members.filter(m=>m.role==='member');
+  $('#membersRows').innerHTML=members.map(m=>{const entries=data.entries.filter(e=>e.member_id===m.id);return `<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill ${m.active===false?'running':''}">${m.active===false?'Deactivated':'Active'}</span></td><td><button class="soft-btn open-member" data-id="${escapeHtml(m.id)}" type="button">Open profile</button></td><td><button class="soft-btn member-toggle" data-id="${escapeHtml(m.id)}" data-active="${m.active===false?'false':'true'}" type="button">${m.active===false?'Reactivate':'Deactivate'}</button></td></tr>`;}).join('')||'<tr><td colspan="5" class="empty">No team member accounts yet. Create the first account using the form.</td></tr>';
+}
+function openMemberProfile(id){
+  const member=data.members.find(m=>m.id===id&&m.role==='member');if(!member)return;
+  const form=$('#memberProfileForm');form.reset();form.elements.id.value=member.id;form.elements.name.value=member.name;form.elements.email.value=member.email;form.elements.job_role.value=member.job_role||'';
+  const entries=data.entries.filter(e=>e.member_id===member.id);$('#memberDialogTitle').textContent=`${member.name} · profile`;
+  $('#memberProfileSummary').textContent=`${member.active===false?'Deactivated':'Active'} account · ${entries.length} visible time ${entries.length===1?'entry':'entries'} · ${hours(total(entries))} tracked in this date range · Google sign-in uses this work email.`;$('#memberProfileError').textContent='';$('#memberDialog').showModal();
+}
+async function saveMemberProfile(event){
+  event.preventDefault();const form=event.currentTarget,button=event.submitter;button.disabled=true;$('#memberProfileError').textContent='';
+  try{const body=Object.fromEntries(new FormData(form));const id=body.id;delete body.id;if(!body.password)delete body.password;await api(`/api/admin/members/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify(body)});$('#memberDialog').close();await refresh();toast('Team member profile updated');}
+  catch(error){$('#memberProfileError').textContent=error.message;}
+  finally{button.disabled=false;}
+}
 function paintTimer(){
   const timer=data.timer;
   if(timer){
@@ -215,11 +230,11 @@ function paintTimer(){
 function paint(){
   if(!me)return;
   $('#topName').textContent=me.name;$('#avatar').textContent=initials(me.name);$('#profileRole').textContent=me.role==='admin'?'Administrator':(me.job_role||'Member');
-  paintCatalog();paintMetrics();paintChart();renderTeam();paintRecent();paintEntriesPage();paintReports();if(me.role==='admin')paintManage();paintTimer();pageConfig(currentPage);
+  paintCatalog();paintMetrics();paintChart();renderTeam();paintRecent();paintEntriesPage();paintReports();if(me.role==='admin'){paintManage();paintMemberDirectory();}paintTimer();pageConfig(currentPage);
 }
 function renderCurrentPage(){
   $('#pageTitle').textContent=currentPage==='overview'?`${greeting()}, ${me.name.split(' ')[0]}`:$('#pageTitle').textContent;
-  paintMetrics();paintChart();renderTeam();paintRecent();paintEntriesPage();paintReports();if(me.role==='admin')paintManage();paintTimer();
+  paintMetrics();paintChart();renderTeam();paintRecent();paintEntriesPage();paintReports();if(me.role==='admin'){paintManage();paintMemberDirectory();}paintTimer();
 }
 async function openDashboard(member){
   enterApp(member);renderNav();currentPage='overview';
@@ -336,9 +351,11 @@ $('#exportEntries').addEventListener('click',exportEntries);$('#exportReport').a
 $('#auditActorFilter')?.addEventListener('change',paintManage);$('#auditMemberFilter')?.addEventListener('change',paintManage);$('#auditActionFilter')?.addEventListener('change',paintManage);
 $('#entryEditForm').addEventListener('submit',saveEditedEntry);$('#cancelEntryEdit').addEventListener('click',()=>$('#entryDialog').close());
 $('#memberForm').addEventListener('submit',createMember);
+ $('#memberProfileForm').addEventListener('submit',saveMemberProfile);$('#closeMemberProfile').addEventListener('click',()=>$('#memberDialog').close());
+ $('#memberRecords').addEventListener('click',()=>{const id=$('#memberProfileForm').elements.id.value;$('#memberDialog').close();$('#memberFilter').value=id;setPage('entries');paintEntriesPage();});
 $('#projectForm').addEventListener('submit',event=>{event.preventDefault();saveCatalog('project',event.currentTarget);});
 $('#roleForm').addEventListener('submit',event=>{event.preventDefault();saveCatalog('role',event.currentTarget);});
-document.addEventListener('click',event=>{const button=event.target.closest('.catalog-toggle');if(button)toggleCatalog(button);const catalogEdit=event.target.closest('.catalog-edit');if(catalogEdit)editCatalog(catalogEdit);const note=event.target.closest('.note-entry');if(note)showEntryUpdates(note.dataset.id);const edit=event.target.closest('.edit-entry');if(edit)openEntryEditor(edit.dataset.id);const del=event.target.closest('.delete-entry');if(del)deleteEntry(del.dataset.id);const member=event.target.closest('.member-toggle');if(member)toggleMember(member);});
+ document.addEventListener('click',event=>{const button=event.target.closest('.catalog-toggle');if(button)toggleCatalog(button);const catalogEdit=event.target.closest('.catalog-edit');if(catalogEdit)editCatalog(catalogEdit);const note=event.target.closest('.note-entry');if(note)showEntryUpdates(note.dataset.id);const edit=event.target.closest('.edit-entry');if(edit)openEntryEditor(edit.dataset.id);const del=event.target.closest('.delete-entry');if(del)deleteEntry(del.dataset.id);const member=event.target.closest('.member-toggle');if(member)toggleMember(member);const openMember=event.target.closest('.open-member');if(openMember)openMemberProfile(openMember.dataset.id);});
 async function init(){
   const callbackParams=new URLSearchParams(window.location.hash.slice(1));
   const callbackToken=callbackParams.get('access_token');
