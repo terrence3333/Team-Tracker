@@ -87,6 +87,7 @@ function enterApp(member){
 }
 function pageConfig(page){
   const admin=me?.role==='admin';
+  $('#manageMembersAction')?.classList.toggle('hidden',!admin||page!=='overview');
   const labels=admin?{overview:['Overview','TEAM WORKSPACE','Your team at a glance'],entries:['Time entries','TEAM RECORDS','Review and export all member time entries'],reports:['Reports','TEAM REPORTING','Compare team hours, projects, and work roles'],members:['Team members','ACCOUNT MANAGEMENT','Create accounts and open or update member profiles'],manage:['Project settings','ADMINISTRATION','Manage projects and available work roles']}:{overview:['Overview','MY WORKSPACE','Your timer, hours, and recent activity'],entries:['My time entries','PERSONAL RECORDS','Review and export your time entries'],reports:['My reports','PERSONAL REPORTING','Review your hours by date, project, and role']};
   const [title,eyebrow,sub]=labels[page]||labels.overview;$('#crumbPage').textContent=title;$('#pageTitle').textContent=page==='overview'?`${greeting()}, ${me.name.split(' ')[0]}`:title;$('#pageEyebrow').textContent=eyebrow;$('#pageSub').textContent=sub;
   ['overview','entries','reports','members','manage'].forEach(name=>$('#page-'+name).classList.toggle('hidden',name!==page));
@@ -371,5 +372,4 @@ async function init(){
 }
 init();
 setInterval(()=>{if(!me)return;if(data.timer)paintTimer();if(Date.now()-lastRefresh>25000)refresh().catch(showError);},1000);
-
 
