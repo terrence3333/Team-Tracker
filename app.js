@@ -1,7 +1,7 @@
 'use strict';
 
 let me = null;
-let data = { members: [], entries: [], timer: null, active_timers: [] };
+let data = { members: [], entries: [], timer: null, active_timers: [], comments: [], audit_log: [] };
 let catalog = { projects: [], roles: [] };
 let currentPage = 'overview';
 let setupRequired = false;
@@ -77,6 +77,7 @@ function greeting(){const hour=new Date().getHours();return hour<12?'Good mornin
 function showAuthError(message){$('#loginError').textContent=message||'';}
 function configureSetup(status){
   setupRequired=true;$('#authTitle').textContent='Set up your workspace';$('#authText').textContent='Create the Tepu Solutions administrator account to get started.';
+  $('#googleLogin').classList.add('hidden');
   $('#setupFields').classList.remove('hidden');$('#confirmField').classList.remove('hidden');$('#adminName').required=true;$('#confirmPassword').required=true;$('#password').autocomplete='new-password';
   if(status.setup_requires_key){$('#setupKeyField').classList.remove('hidden');$('#setupKey').required=true;$('#loginFoot').textContent='Use the one-time setup key saved in your hosting dashboard or password manager.';}
   $('#loginSubmit').textContent='Create administrator account';
@@ -101,6 +102,7 @@ function setPage(page){if(page==='manage'&&me.role!=='admin')return;pageConfig(p
 function paintCatalog(){
   const currentProject=$('#projectName').value;
   $('#projectName').innerHTML='<option value="">Select a project</option>'+catalog.projects.filter(p=>p.active!==false).map(p=>`<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}</option>`).join('');
+  const projectTypes=$('#projectTypeOptions');if(projectTypes){const types=[...new Set(['Production',...catalog.projects.map(project=>project.project_type).filter(Boolean)])];projectTypes.innerHTML=types.map(type=>`<option value="${escapeHtml(type)}"></option>`).join('');}
   if(catalog.projects.some(p=>p.name===currentProject))$('#projectName').value=currentProject;
   const selected=catalog.projects.find(p=>p.name===$('#projectName').value);
   $('#projectTypeDisplay').textContent=selected?.project_type||'Choose a project';
@@ -147,7 +149,9 @@ function renderTeam(){
 function entryRow(entry,includeDetails=false){
   const day=new Date(`${entry.date}T00:00:00`).toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'});
   const row=[day,escapeHtml(memberName(entry.member_id)),escapeHtml(entry.project_id||'—'),escapeHtml(entry.project||'—'),escapeHtml(entry.project_type||'—'),escapeHtml(entry.work_role||'—'),escapeHtml(entry.description||'—'),escapeHtml(entry.start||'—'),hours(elapsed(entry)),durationCell(entry)];
-  return `<tr>${(includeDetails?row:row.filter((_,i)=>[0,1,2,3,5,8,9].includes(i))).map((cell,i)=>`<td>${cell}</td>`).join('')}</tr>`;
+  const comments=data.comments.filter(note=>note.entry_id===entry.id);
+  const actions=`<button class="soft-btn note-entry" data-id="${entry.id}" type="button">Updates (${comments.length})</button>${me.role==='admin'&& !entry.running?` <button class="soft-btn edit-entry" data-id="${entry.id}" type="button">Edit</button> <button class="danger-btn delete-entry" data-id="${entry.id}" type="button">Delete</button>`:''}`;
+  return `<tr>${(includeDetails?row:row.filter((_,i)=>[0,1,2,3,5,8,9].includes(i))).map(cell=>`<td>${cell}</td>`).join('')}<td>${actions}</td></tr>`;
 }
 function paintRecent(){
   const recent=data.entries.slice(0,6);$('#recentRows').innerHTML=recent.length?recent.map(e=>entryRow(e,false)).join():'<tr><td colspan="7" class="empty">No time entries in this date range. Start a timer to log work.</td></tr>';
@@ -159,7 +163,9 @@ function paintEntriesPage(){
   if(data.members.some(m=>m.id===selected))filter.value=selected;
   const entries=data.entries.filter(e=>!filter.value||e.member_id===filter.value);
   $('#entriesSub').textContent=`${entries.length} entries · ${rangeLabel()}`;
-  $('#entriesRows').innerHTML=entries.length?entries.map(e=>entryRow(e,true)).join():'<tr><td colspan="10" class="empty">No time entries in this date range.</td></tr>';
+  $('#entriesRows').innerHTML=entries.length?entries.map(e=>entryRow(e,true)).join():'<tr><td colspan="11" class="empty">No time entries in this date range.</td></tr>';
+  const entryMap=new Map(entries.map(e=>[e.id,e]));const notes=data.comments.filter(c=>entryMap.has(c.entry_id));
+  $('#updatesRows').innerHTML=notes.length?notes.map(c=>`<tr><td>${new Date(c.created_at).toLocaleString('en-ZA')}</td><td>${escapeHtml(c.member_name)}</td><td>${escapeHtml(entryMap.get(c.entry_id)?.project||'—')}</td><td>${escapeHtml(c.comment)}</td></tr>`).join():'<tr><td colspan="4" class="empty">No progress updates in this period. Add one from a session’s Updates button.</td></tr>';
 }
 function aggregate(list,keyFn){
   const map=new Map();
@@ -177,20 +183,30 @@ function paintReports(){
   $('#projectReportRows').innerHTML=groups.map(g=>{const [project,type,role]=g.key.split('\u0000');return `<tr><td><strong>${escapeHtml(project)}</strong></td><td>${escapeHtml(type)}</td><td>${escapeHtml(role)}</td><td>${g.count}</td><td>${hours(g.seconds)}</td></tr>`;}).join('')||'<tr><td colspan="5" class="empty">No project activity in this date range.</td></tr>';
 }
 function paintManage(){
-  $('#membersRows').innerHTML=data.members.map(m=>`<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill">${m.role==='admin'?'Administrator':'Member'}</span></td></tr>`).join('')||'<tr><td colspan="3" class="empty">No members yet.</td></tr>';
-  $('#projectsList').innerHTML=catalog.projects.map(p=>`<div class="catalog-item"><div><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.project_type||'Project')}${p.active===false?' · Archived':''}</span></div><button class="soft-btn catalog-toggle" data-kind="project" data-id="${p.id}" data-active="${p.active===false?'false':'true'}">${p.active===false?'Restore':'Archive'}</button></div>`).join('')||'<div class="small-note">No projects yet. Add a project above.</div>';
-  $('#rolesList').innerHTML=catalog.roles.map(r=>`<div class="catalog-item"><div><strong>${escapeHtml(r.name)}</strong><span>${r.active===false?'Archived':'Available to members'}</span></div><button class="soft-btn catalog-toggle" data-kind="role" data-id="${r.id}" data-active="${r.active===false?'false':'true'}">${r.active===false?'Restore':'Archive'}</button></div>`).join('')||'<div class="small-note">No work roles yet. Add a role above.</div>';
-  $('#adminSummary').innerHTML=[['Members',String(data.members.length)],['Logged entries in selected range',String(data.entries.length)],['Currently running timers',String((data.active_timers||[]).length)],['Selected period',rangeLabel()]].map(([a,b])=>`<div class="catalog-item"><strong>${escapeHtml(a)}</strong><span>${escapeHtml(b)}</span></div>`).join('');
+  $('#membersRows').innerHTML=data.members.map(m=>`<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill ${m.active===false?'running':''}">${m.active===false?'Deactivated':'Active'}</span></td><td>${m.role==='member'?`<button class="soft-btn member-toggle" data-id="${m.id}" data-active="${m.active===false?'false':'true'}" type="button">${m.active===false?'Reactivate':'Deactivate'}</button>`:'—'}</td></tr>`).join('')||'<tr><td colspan="4" class="empty">No members yet.</td></tr>';
+  $('#projectsList').innerHTML=catalog.projects.map(p=>`<div class="catalog-item"><div><strong>${escapeHtml(p.name)}</strong><span>${escapeHtml(p.project_type||'Project')}${p.active===false?' · Archived':''}</span></div><div><button class="soft-btn catalog-edit" data-kind="project" data-id="${p.id}">Edit</button> <button class="soft-btn catalog-toggle" data-kind="project" data-id="${p.id}" data-active="${p.active===false?'false':'true'}">${p.active===false?'Restore':'Archive'}</button></div></div>`).join('')||'<div class="small-note">No projects yet. Add a project above.</div>';
+  $('#rolesList').innerHTML=catalog.roles.map(r=>`<div class="catalog-item"><div><strong>${escapeHtml(r.name)}</strong><span>${r.active===false?'Archived':'Available to members'}</span></div><div><button class="soft-btn catalog-edit" data-kind="role" data-id="${r.id}">Edit</button> <button class="soft-btn catalog-toggle" data-kind="role" data-id="${r.id}" data-active="${r.active===false?'false':'true'}">${r.active===false?'Restore':'Archive'}</button></div></div>`).join('')||'<div class="small-note">No work roles yet. Add a role above.</div>';
+  $('#adminSummary').innerHTML=[['Members',String(data.members.length)],['Logged entries in selected range',String(data.entries.length)],['Currently running timers',String((data.active_timers||[]).length)],['Audit events in selected range',String((data.audit_log||[]).length)],['Selected period',rangeLabel()]].map(([a,b])=>`<div class="catalog-item"><strong>${escapeHtml(a)}</strong><span>${escapeHtml(b)}</span></div>`).join('');
+  const events=data.audit_log||[];const target=$('#auditMemberFilter')?.value||'';const kind=$('#auditActionFilter')?.value||'';const actor=$('#auditActorFilter')?.value||'';
+  if($('#auditRows')){
+    const actorSelect=$('#auditActorFilter'),memberSelect=$('#auditMemberFilter'),actionSelect=$('#auditActionFilter');
+    if(actorSelect){const old=actorSelect.value;const actors=[...new Map(events.map(e=>[e.actor_member_id,e.actor_name])).entries()];actorSelect.innerHTML='<option value="">All administrators</option>'+actors.map(([id,name])=>`<option value="${escapeHtml(id||'system')}">${escapeHtml(name)}</option>`).join('');if(actors.some(([id])=>(id||'system')===old))actorSelect.value=old;}
+    if(memberSelect){const old=memberSelect.value;memberSelect.innerHTML='<option value="">All team members</option>'+data.members.filter(m=>m.role!=='admin').map(m=>`<option value="${m.id}">${escapeHtml(m.name)}</option>`).join('');if(data.members.some(m=>m.id===old))memberSelect.value=old;}
+    if(actionSelect){const old=actionSelect.value;actionSelect.innerHTML='<option value="">All activity</option>'+[...new Set(events.map(e=>e.action))].map(a=>`<option value="${escapeHtml(a)}">${escapeHtml(a.replaceAll('_',' '))}</option>`).join('');if(events.some(e=>e.action===old))actionSelect.value=old;}
+    $('#auditRows').innerHTML=events.filter(e=>(!target||e.target_member_id===target)&&(!kind||e.action===kind)&&(!actor||(actor==='system'?!e.actor_member_id:e.actor_member_id===actor))).map(e=>`<tr><td>${new Date(e.created_at).toLocaleString('en-ZA')}</td><td>${escapeHtml(e.actor_name)}</td><td>${escapeHtml(e.target_member_name||'—')}</td><td>${escapeHtml(e.action.replaceAll('_',' '))}</td><td>${escapeHtml(e.entity_type)}</td><td>${escapeHtml(e.entity_id||'—')}</td><td><details><summary>View</summary><pre>${escapeHtml(JSON.stringify({before:e.before_values||null,after:e.after_values||null,details:e.metadata||{}},null,2))}</pre></details></td></tr>`).join('')||'<tr><td colspan="7" class="empty">No audit activity for this period.</td></tr>';
+  }
   paintCatalog();
 }
 function paintTimer(){
   const timer=data.timer;
   if(timer){
+    $('#timerUpdate').classList.remove('hidden');
     const seconds=Math.max(0,Math.floor(Date.now()/1000-timer.started_at));
     $('#clock').textContent=`${pad(Math.floor(seconds/3600))}:${pad(Math.floor(seconds%3600/60))}:${pad(seconds%60)}`;
     $('#timerCaption').textContent=`${timer.project_id?timer.project_id+' · ':''}${timer.project||timer.description} · ${timer.work_role||'Work in progress'}`;
     $('#timerButton').classList.add('stop');$('#timerButton').textContent='■ Stop timer';
   }else{
+    $('#timerUpdate').classList.add('hidden');
     $('#clock').textContent='00:00:00';$('#timerCaption').textContent='Ready when you are';$('#timerButton').classList.remove('stop');$('#timerButton').textContent='▶ Start timer';
   }
   ['#projectId','#projectName','#workRole'].forEach(selector=>$(selector).disabled=Boolean(timer));
@@ -223,6 +239,26 @@ function exportReports(){
   const entries=me.role==='admin'?data.entries:data.entries.filter(e=>e.member_id===me.id);const members=me.role==='admin'?data.members:[me];
   downloadCsv('tepu-hours-report.csv',[['Member','Work role','Entries','Hours','Project'],...members.map(m=>{const rows=entries.filter(e=>e.member_id===m.id);return[m.name,m.job_role,rows.length,(total(rows)/3600).toFixed(2),aggregate(rows,e=>e.project||'—').sort((a,b)=>b.seconds-a.seconds)[0]?.key||'—'];})]);
 }
+function exportAudit(){downloadCsv('tepu-audit-trail.csv',[['When','Actor','Team member','Action','Entity','Record ID','Before','After','Details'],...(data.audit_log||[]).map(e=>[e.created_at,e.actor_name,e.target_member_name,e.action,e.entity_type,e.entity_id,JSON.stringify(e.before_values||{}),JSON.stringify(e.after_values||{}),JSON.stringify(e.metadata||{})])]);}
+async function showEntryUpdates(id){
+  const notes=data.comments.filter(c=>c.entry_id===id);const history=notes.map(n=>`${new Date(n.created_at).toLocaleString('en-ZA')} · ${n.member_name}: ${n.comment}`).join('\n\n')||'No updates have been added to this session.';
+  window.alert(history);const comment=window.prompt('Add a progress update (up to 2,000 characters):');if(comment===null||!comment.trim())return;
+  try{await api(`/api/entries/${encodeURIComponent(id)}/comments`,{method:'POST',body:JSON.stringify({comment})});await refresh();toast('Update saved');}catch(error){showError(error);}
+}
+function openEntryEditor(id){
+  const entry=data.entries.find(e=>e.id===id);if(!entry)return;const form=$('#entryEditForm');
+  for(const [key,value] of Object.entries({id:entry.id,project_id:entry.project_id,project:entry.project,project_type:entry.project_type,description:entry.description,date:entry.date,start:entry.start,duration_minutes:Math.max(1,Math.round(elapsed(entry)/60))}))form.elements[key].value=value;
+  $('#editWorkRole').innerHTML=catalog.roles.map(r=>`<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join('');$('#editWorkRole').value=entry.work_role;$('#entryDialog').showModal();
+}
+async function saveEditedEntry(event){event.preventDefault();const form=event.currentTarget,id=form.elements.id.value;const body=Object.fromEntries(new FormData(form));delete body.id;body.duration_minutes=Number(body.duration_minutes);
+  try{await api(`/api/admin/entries/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify(body)});$('#entryDialog').close();await refresh();toast('Timesheet updated and audited');}catch(error){showError(error);}
+}
+async function deleteEntry(id){if(!window.confirm('Delete this recorded work session? The action will be preserved in the audit trail.'))return;
+  try{await api(`/api/admin/entries/${encodeURIComponent(id)}`,{method:'DELETE',body:'{}'});await refresh();toast('Timesheet deleted and audited');}catch(error){showError(error);}
+}
+async function toggleMember(button){const active=button.dataset.active==='false';if(!active&&!window.confirm('Deactivate this member account? This stops future sign-ins and keeps their history.'))return;
+  try{await api(`/api/admin/members/${encodeURIComponent(button.dataset.id)}`,{method:'PATCH',body:JSON.stringify({active})});await refresh();toast(active?'Member account reactivated':'Member account deactivated');}catch(error){showError(error);}
+}
 async function saveCatalog(kind,form){
   const errorId=kind==='project'?'#projectError':'#roleError';$(errorId).textContent='';
   try{await api(`/api/admin/${kind}s`,{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});form.reset();await refresh();toast(kind==='project'?'Project added':'Work role added');}
@@ -232,6 +268,11 @@ async function toggleCatalog(button){
   const kind=button.dataset.kind;const endpoint=kind==='project'?'/api/admin/projects/':'/api/admin/roles/';
   try{await api(endpoint+encodeURIComponent(button.dataset.id),{method:'PATCH',body:JSON.stringify({active:button.dataset.active==='false'})});await refresh();toast('Options updated');}
   catch(error){showError(error);}
+}
+async function editCatalog(button){const kind=button.dataset.kind,id=button.dataset.id;const item=(kind==='project'?catalog.projects:catalog.roles).find(option=>option.id===id);if(!item)return;
+  const name=window.prompt(`${kind==='project'?'Project':'Role'} name:`,item.name);if(name===null)return;const body={name:name.trim()};
+  if(kind==='project'){const project_type=window.prompt('Project type (Production is available):',item.project_type||'Production');if(project_type===null)return;body.project_type=project_type.trim();}
+  try{await api(`/api/admin/${kind}s/${encodeURIComponent(id)}`,{method:'PATCH',body:JSON.stringify(body)});await refresh();toast(`${kind==='project'?'Project':'Role'} updated`);}catch(error){showError(error);}
 }
 async function saveProfile(event){
   event.preventDefault();const button=event.submitter;button.disabled=true;
@@ -270,7 +311,9 @@ $('#loginForm').addEventListener('submit',async event=>{
   }catch(error){showAuthError(error.message);}
   finally{button.disabled=false;}
 });
+$('#googleLogin').addEventListener('click',()=>{window.location.assign('/api/auth/google');});
 $('#timerButton').addEventListener('click',submitTimer);
+$('#timerUpdate').addEventListener('click',()=>data.timer&&showEntryUpdates(data.timer.id));
 $('#projectName').addEventListener('change',()=>{const p=catalog.projects.find(x=>x.name===$('#projectName').value);$('#projectTypeDisplay').textContent=p?.project_type||'Choose a project';});
 $('#profileButton').addEventListener('click',()=>{const menu=$('#profileMenu');menu.classList.toggle('hidden');$('#profileButton').setAttribute('aria-expanded',String(!menu.classList.contains('hidden')));});
 document.addEventListener('click',event=>{if(!event.target.closest('.profile-wrap')){$('#profileMenu')?.classList.add('hidden');$('#profileButton')?.setAttribute('aria-expanded','false');}});
@@ -289,15 +332,27 @@ $('#rangeApply').addEventListener('click',async()=>{const from=$('#rangeFrom').v
 $('#rangeFrom').addEventListener('input',()=>{activePreset='custom';document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('selected'));});
 $('#rangeTo').addEventListener('input',()=>{activePreset='custom';document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('selected'));});
 $('#memberFilter').addEventListener('change',paintEntriesPage);
-$('#exportEntries').addEventListener('click',exportEntries);$('#exportReport').addEventListener('click',exportReports);
+$('#exportEntries').addEventListener('click',exportEntries);$('#exportReport').addEventListener('click',exportReports);$('#exportAudit')?.addEventListener('click',exportAudit);
+$('#auditActorFilter')?.addEventListener('change',paintManage);$('#auditMemberFilter')?.addEventListener('change',paintManage);$('#auditActionFilter')?.addEventListener('change',paintManage);
+$('#entryEditForm').addEventListener('submit',saveEditedEntry);$('#cancelEntryEdit').addEventListener('click',()=>$('#entryDialog').close());
 $('#memberForm').addEventListener('submit',createMember);
 $('#projectForm').addEventListener('submit',event=>{event.preventDefault();saveCatalog('project',event.currentTarget);});
 $('#roleForm').addEventListener('submit',event=>{event.preventDefault();saveCatalog('role',event.currentTarget);});
-document.addEventListener('click',event=>{const button=event.target.closest('.catalog-toggle');if(button)toggleCatalog(button);});
+document.addEventListener('click',event=>{const button=event.target.closest('.catalog-toggle');if(button)toggleCatalog(button);const catalogEdit=event.target.closest('.catalog-edit');if(catalogEdit)editCatalog(catalogEdit);const note=event.target.closest('.note-entry');if(note)showEntryUpdates(note.dataset.id);const edit=event.target.closest('.edit-entry');if(edit)openEntryEditor(edit.dataset.id);const del=event.target.closest('.delete-entry');if(del)deleteEntry(del.dataset.id);const member=event.target.closest('.member-toggle');if(member)toggleMember(member);});
 async function init(){
-  try{const status=await api('/api/status');if(status.setup_required){configureSetup(status);return;}if(status.member){await openDashboard(status.member);return;}}
+  const callbackParams=new URLSearchParams(window.location.hash.slice(1));
+  const callbackToken=callbackParams.get('access_token');
+  const callbackError=callbackParams.get('error_description')||callbackParams.get('error');
+  if(callbackToken||callbackError){
+    history.replaceState(null,'',window.location.pathname+window.location.search);
+    if(callbackError){showAuthError(callbackError);return;}
+    try{const result=await api('/api/auth/google',{method:'POST',body:JSON.stringify({access_token:callbackToken})});await openDashboard(result.member);return;}
+    catch(error){showAuthError(error.message);}
+  }
+  try{const status=await api('/api/status');if(status.setup_required){configureSetup(status);return;}if(status.member){await openDashboard(status.member);return;}if(status.google_sign_in_available)$('#googleLogin').classList.remove('hidden');}
   catch(error){showAuthError(error.message);}
 }
 init();
 setInterval(()=>{if(!me)return;if(data.timer)paintTimer();if(Date.now()-lastRefresh>25000)refresh().catch(showError);},1000);
+
 
