@@ -90,6 +90,7 @@ function pageConfig(page){
   $('#manageMembersAction')?.classList.toggle('hidden',!admin||page!=='overview');
   const labels=admin?{overview:['Overview','TEAM WORKSPACE','Your team at a glance'],entries:['Time entries','TEAM RECORDS','Review and export all member time entries'],reports:['Reports','TEAM REPORTING','Compare team hours, projects, and work roles'],members:['Team members','ACCOUNT MANAGEMENT','Create accounts and open or update member profiles'],manage:['Project settings','ADMINISTRATION','Manage projects and available work roles']}:{overview:['Overview','MY WORKSPACE','Your timer, hours, and recent activity'],entries:['My time entries','PERSONAL RECORDS','Review and export your time entries'],reports:['My reports','PERSONAL REPORTING','Review your hours by date, project, and role']};
   const [title,eyebrow,sub]=labels[page]||labels.overview;$('#crumbPage').textContent=title;$('#pageTitle').textContent=page==='overview'?`${greeting()}, ${me.name.split(' ')[0]}`:title;$('#pageEyebrow').textContent=eyebrow;$('#pageSub').textContent=sub;
+  $('#returnHome').classList.toggle('hidden',page==='overview');
   ['overview','entries','reports','members','manage'].forEach(name=>$('#page-'+name).classList.toggle('hidden',name!==page));
   currentPage=page;
   document.querySelectorAll('.nav-btn').forEach(button=>button.classList.toggle('active',button.dataset.page===page));
@@ -112,6 +113,8 @@ function paintCatalog(){
   if(catalog.roles.some(r=>r.name===currentRole))$('#workRole').value=currentRole;
   $('#timerNote').textContent=catalog.projects.length&&catalog.roles.length?'Enter the project ID, choose a project, and select your work role.':'Ask your administrator to add a project and work role before starting a timer.';
   $('#timerButton').disabled=!data.timer&&(!catalog.projects.length||!catalog.roles.length);
+  const memberTypes=[...new Set(['Production',...catalog.projects.filter(project=>project.active!==false).map(project=>project.project_type).filter(Boolean)])];
+  ['#memberProjectType','#editMemberProjectType'].forEach(selector=>{const typeSelect=$(selector);if(typeSelect){const value=typeSelect.value;typeSelect.innerHTML=memberTypes.map(type=>`<option value="${escapeHtml(type)}">${escapeHtml(type)}</option>`).join('');typeSelect.value=memberTypes.includes(value)?value:'Production';}});
   ['#memberJobRole','#editMemberRole'].forEach(selector=>{const jobRole=$(selector);if(jobRole){const v=jobRole.value;jobRole.innerHTML='<option value="">No default role</option>'+catalog.roles.filter(r=>r.active!==false).map(r=>`<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)}</option>`).join('');if(catalog.roles.some(r=>r.name===v))jobRole.value=v;}});
 }
 function paintMetrics(){
@@ -138,12 +141,12 @@ function paintChart(){
 function durationCell(entry){return `<span class="pill ${entry.running?'running':''}">${entry.running?'Running':'Logged'}</span>`;}
 function renderTeam(){
   if(me.role==='admin'){
-    $('#teamPanelTitle').textContent='Team progress';$('#teamPanelSub').textContent='Hours tracked by member · select a member to review their records';$('#memberCount').textContent=`${data.members.length} members`;$('#teamHeader').innerHTML='<th>Member</th><th>Work role</th><th>Hours</th><th></th>';
-    const rows=data.members.map((member,index)=>{const seconds=total(data.entries.filter(e=>e.member_id===member.id));const [bg,fg]=colors[index%colors.length];return `<tr><td><strong><span class="avatar" style="display:inline-grid;vertical-align:middle;width:26px;height:26px;margin-right:7px;background:${bg};color:${fg}">${initials(member.name)}</span>${escapeHtml(member.name)}</strong></td><td>${escapeHtml(member.job_role|| (member.role==='admin'?'Administrator':'—'))}</td><td>${hours(seconds)}</td><td><button type="button" class="soft-btn" data-open-member="${escapeHtml(member.id)}">View records</button></td></tr>`;}).join('');
-    $('#teamRows').innerHTML=rows||'<tr><td colspan="4" class="empty">No team members yet.</td></tr>';
+    $('#teamPanelTitle').textContent='Team progress';$('#teamPanelSub').textContent='Hours tracked by member · select a member to review their records';$('#memberCount').textContent=`${data.members.length} members`;$('#teamHeader').innerHTML='<th>Member</th><th>Project type</th><th>Work role</th><th>Hours</th><th></th>';
+    const rows=data.members.map((member,index)=>{const seconds=total(data.entries.filter(e=>e.member_id===member.id));const [bg,fg]=colors[index%colors.length];return `<tr><td><strong><span class="avatar" style="display:inline-grid;vertical-align:middle;width:26px;height:26px;margin-right:7px;background:${bg};color:${fg}">${initials(member.name)}</span>${escapeHtml(member.name)}</strong></td><td>${escapeHtml(member.project_type||'Production')}</td><td>${escapeHtml(member.job_role|| (member.role==='admin'?'Administrator':'—'))}</td><td>${hours(seconds)}</td><td><button type="button" class="soft-btn" data-open-member="${escapeHtml(member.id)}">View records</button></td></tr>`;}).join('');
+    $('#teamRows').innerHTML=rows||'<tr><td colspan="5" class="empty">No team members yet.</td></tr>';
   }else{
-    $('#teamPanelTitle').textContent='My work summary';$('#teamPanelSub').textContent='Your hours in this period';$('#memberCount').textContent=me.job_role||'Member';$('#teamHeader').innerHTML='<th>Summary</th><th>Value</th>';
-    const entries=data.entries.filter(e=>e.member_id===me.id);$('#teamRows').innerHTML=`<tr><td><strong>Work role</strong></td><td>${escapeHtml(me.job_role||'Not assigned')}</td></tr><tr><td><strong>Tracked hours</strong></td><td>${hours(total(entries))}</td></tr><tr><td><strong>Logged sessions</strong></td><td>${entries.length}</td></tr><tr><td><strong>Projects used</strong></td><td>${new Set(entries.map(e=>e.project)).size}</td></tr>`;
+    $('#teamPanelTitle').textContent='My work summary';$('#teamPanelSub').textContent='Your assignments and hours in this period';$('#memberCount').textContent=me.job_role||'Member';$('#teamHeader').innerHTML='<th>Summary</th><th>Value</th>';
+    const entries=data.entries.filter(e=>e.member_id===me.id);$('#teamRows').innerHTML=`<tr><td><strong>Project type</strong></td><td>${escapeHtml(me.project_type||'Production')}</td></tr><tr><td><strong>Work role</strong></td><td>${escapeHtml(me.job_role||'Not assigned')}</td></tr><tr><td><strong>Tracked hours</strong></td><td>${hours(total(entries))}</td></tr><tr><td><strong>Logged sessions</strong></td><td>${entries.length}</td></tr><tr><td><strong>Projects used</strong></td><td>${new Set(entries.map(e=>e.project)).size}</td></tr>`;
   }
 }
 function entryRow(entry,includeDetails=false){
@@ -199,11 +202,11 @@ function paintManage(){
 }
 function paintMemberDirectory(){
   const members=data.members.filter(m=>m.role==='member');
-  $('#membersRows').innerHTML=members.map(m=>{const entries=data.entries.filter(e=>e.member_id===m.id);return `<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill ${m.active===false?'running':''}">${m.active===false?'Deactivated':'Active'}</span></td><td><button class="soft-btn open-member" data-id="${escapeHtml(m.id)}" type="button">Open profile</button></td><td><button class="soft-btn member-toggle" data-id="${escapeHtml(m.id)}" data-active="${m.active===false?'false':'true'}" type="button">${m.active===false?'Reactivate':'Deactivate'}</button></td></tr>`;}).join('')||'<tr><td colspan="5" class="empty">No team member accounts yet. Create the first account using the form.</td></tr>';
+  $('#membersRows').innerHTML=members.map(m=>`<tr><td><strong>${escapeHtml(m.name)}</strong><div class="small-note">${escapeHtml(m.email)}</div></td><td>${escapeHtml(m.project_type||'Production')}</td><td>${escapeHtml(m.job_role||'—')}</td><td><span class="pill ${m.active===false?'running':''}">${m.active===false?'Deactivated':'Active'}</span></td><td><button class="soft-btn open-member" data-id="${escapeHtml(m.id)}" type="button">Open profile</button></td><td><button class="soft-btn member-toggle" data-id="${escapeHtml(m.id)}" data-active="${m.active===false?'false':'true'}" type="button">${m.active===false?'Reactivate':'Deactivate'}</button></td></tr>`).join('')||'<tr><td colspan="6" class="empty">No team member accounts yet. Create the first account using the form.</td></tr>';
 }
 function openMemberProfile(id){
   const member=data.members.find(m=>m.id===id&&m.role==='member');if(!member)return;
-  const form=$('#memberProfileForm');form.reset();form.elements.id.value=member.id;form.elements.name.value=member.name;form.elements.email.value=member.email;form.elements.job_role.value=member.job_role||'';
+  const form=$('#memberProfileForm');form.reset();form.elements.id.value=member.id;form.elements.name.value=member.name;form.elements.email.value=member.email;form.elements.project_type.value=member.project_type||'Production';form.elements.job_role.value=member.job_role||'';
   const entries=data.entries.filter(e=>e.member_id===member.id);$('#memberDialogTitle').textContent=`${member.name} · profile`;
   $('#memberProfileSummary').textContent=`${member.active===false?'Deactivated':'Active'} account · ${entries.length} visible time ${entries.length===1?'entry':'entries'} · ${hours(total(entries))} tracked in this date range · Google sign-in uses this work email.`;$('#memberProfileError').textContent='';$('#memberDialog').showModal();
 }
@@ -298,7 +301,7 @@ async function saveProfile(event){
 }
 async function createMember(event){
   event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');$('#memberError').textContent='';button.disabled=true;
-  try{await api('/api/members',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});form.reset();await refresh();toast('Member account created');}
+  try{await api('/api/members',{method:'POST',body:JSON.stringify(Object.fromEntries(new FormData(form)))});form.reset();$('#memberProjectType').value='Production';await refresh();toast('Member account created');}
   catch(error){$('#memberError').textContent=error.message;}
   finally{button.disabled=false;}
 }
@@ -332,19 +335,27 @@ $('#timerButton').addEventListener('click',submitTimer);
 $('#timerUpdate').addEventListener('click',()=>data.timer&&showEntryUpdates(data.timer.id));
 $('#projectName').addEventListener('change',()=>{const p=catalog.projects.find(x=>x.name===$('#projectName').value);$('#projectTypeDisplay').textContent=p?.project_type||'Choose a project';});
 $('#profileButton').addEventListener('click',()=>{const menu=$('#profileMenu');menu.classList.toggle('hidden');$('#profileButton').setAttribute('aria-expanded',String(!menu.classList.contains('hidden')));});
-document.addEventListener('click',event=>{if(!event.target.closest('.profile-wrap')){$('#profileMenu')?.classList.add('hidden');$('#profileButton')?.setAttribute('aria-expanded','false');}});
+function closeProfileMenu(){ $('#profileMenu')?.classList.add('hidden');$('#profileButton')?.setAttribute('aria-expanded','false'); }
+function closeRangePopover(){ $('#rangePopover')?.classList.add('hidden');$('#dateFilterBtn')?.setAttribute('aria-expanded','false'); }
+document.addEventListener('click',event=>{
+  if(!event.target.closest('.profile-wrap'))closeProfileMenu();
+  if(!event.target.closest('.filter-wrap'))closeRangePopover();
+});
+document.addEventListener('keydown',event=>{
+  if(event.key==='Escape'){closeProfileMenu();closeRangePopover();}
+});
 $('#profileForm').addEventListener('submit',saveProfile);
 $('#logout').addEventListener('click',async()=>{try{await api('/api/logout',{method:'POST',body:'{}'});}catch(error){showError(error);}me=null;data={members:[],entries:[],timer:null,active_timers:[]};$('#app').classList.add('hidden');$('#login').classList.remove('hidden');$('#profileMenu').classList.add('hidden');showAuthError('');});
 $('#nav').addEventListener('click',event=>{const button=event.target.closest('[data-page]');if(button)setPage(button.dataset.page);});
 $('#teamRows').addEventListener('click',event=>{const button=event.target.closest('[data-open-member]');if(!button)return;$('#memberFilter').value=button.dataset.openMember;setPage('entries');paintEntriesPage();});
 document.addEventListener('click',event=>{const button=event.target.closest('[data-open-page]');if(button)setPage(button.dataset.openPage);});
-$('#dateFilterBtn').addEventListener('click',()=>{$('#rangePopover').classList.toggle('hidden');$('#rangeFrom').value=dateRange.from;$('#rangeTo').value=dateRange.to;});
+$('#dateFilterBtn').addEventListener('click',()=>{const open=$('#rangePopover').classList.contains('hidden');$('#rangePopover').classList.toggle('hidden');$('#dateFilterBtn').setAttribute('aria-expanded',String(open));if(open){$('#rangeFrom').value=dateRange.from;$('#rangeTo').value=dateRange.to;}});
 $('#calendarPrev').addEventListener('click',()=>{calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()-1,1);paintCalendar();});
 $('#calendarNext').addEventListener('click',()=>{calendarMonth=new Date(calendarMonth.getFullYear(),calendarMonth.getMonth()+1,1);paintCalendar();});
 $('#calendarDays').addEventListener('click',event=>{const button=event.target.closest('[data-date]');if(button)chooseCalendarDay(button.dataset.date);});
 document.querySelectorAll('.preset-btn').forEach(button=>button.addEventListener('click',()=>applyPreset(button.dataset.preset)));
-$('#rangeCancel').addEventListener('click',()=>$('#rangePopover').classList.add('hidden'));
-$('#rangeApply').addEventListener('click',async()=>{const from=$('#rangeFrom').value,to=$('#rangeTo').value;if(!from||!to||from>to){toast('Choose a valid start and end date');return;}if(activePreset==='custom'||from!==dateRange.from||to!==dateRange.to)setRange(fromISO(from),fromISO(to),`${fromISO(from).toLocaleDateString('en-ZA',{day:'numeric',month:'short'})} – ${fromISO(to).toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'})}`,'custom');$('#rangePopover').classList.add('hidden');try{await refresh();}catch(error){showError(error);}});
+$('#rangeCancel').addEventListener('click',closeRangePopover);
+$('#rangeApply').addEventListener('click',async()=>{const from=$('#rangeFrom').value,to=$('#rangeTo').value;if(!from||!to||from>to){toast('Choose a valid start and end date');return;}if(activePreset==='custom'||from!==dateRange.from||to!==dateRange.to)setRange(fromISO(from),fromISO(to),`${fromISO(from).toLocaleDateString('en-ZA',{day:'numeric',month:'short'})} – ${fromISO(to).toLocaleDateString('en-ZA',{day:'numeric',month:'short',year:'numeric'})}`,'custom');closeRangePopover();try{await refresh();}catch(error){showError(error);}});
 $('#rangeFrom').addEventListener('input',()=>{activePreset='custom';document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('selected'));});
 $('#rangeTo').addEventListener('input',()=>{activePreset='custom';document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('selected'));});
 $('#memberFilter').addEventListener('change',paintEntriesPage);
