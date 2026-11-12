@@ -395,6 +395,12 @@ async function handle(request, db, setupKey) {
     if (typeof body.email === 'string') update.email = body.email.trim().toLowerCase();
     if (typeof body.job_role === 'string') update.job_role = body.job_role.trim();
     if (typeof body.active === 'boolean') update.active = body.active;
+    if (body.password !== undefined) {
+      if (typeof body.password !== 'string' || body.password.length < 10 || body.password.length > 200) return reply({ error: 'A reset password must be between 10 and 200 characters.' }, 400);
+      const salt = randomBytes(16).toString('hex');
+      update.password_salt = salt;
+      update.password_hash = passwordHash(body.password, salt);
+    }
     if ((update.name !== undefined && (!update.name || update.name.length > 100)) || (update.email !== undefined && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email) || update.email.length > 254))) return reply({ error: 'Enter a valid name and work email.' }, 400);
     if (update.job_role && !await activeCatalogItem(db, TABLES.roles, update.job_role)) return reply({ error: 'Choose an active work role from the list.' }, 400);
     if (!Object.keys(update).length) return reply({ error: 'Choose a profile field to update.' }, 400);
