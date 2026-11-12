@@ -39,3 +39,4 @@ grant all on public.tracker_projects, public.tracker_work_roles to service_role;
 
 create index if not exists tracker_entries_project_name on public.tracker_entries (project);
 create index if not exists tracker_entries_work_role on public.tracker_entries (work_role);
+
