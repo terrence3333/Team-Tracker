@@ -4,7 +4,11 @@ import { createHash, pbkdf2Sync, randomBytes, timingSafeEqual, randomUUID } from
 const PASSWORD_ROUNDS = 310_000;
 const SESSION_DAYS = 14;
 const SESSION_COOKIE = 'tepu_session';
-const TABLES = { members: 'tracker_members', sessions: 'tracker_sessions', entries: 'tracker_entries', projects: 'tracker_projects', roles: 'tracker_work_roles' };
+const TABLES = { members: 'tracker_members', sessions: 'tracker_sessions', entries: 'tracker_entries', projects: 'tracker_projects', roles: 'tracker_work_roles', comments: 'tracker_entry_comments', audit: 'tracker_audit_log' };
+
+function publicSupabaseKey() {
+  return process.env.SUPABASE_PUBLISHABLE_KEY || process.env.SUPABASE_ANON_KEY || '';
+}
 
 function reply(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), {
@@ -38,7 +42,11 @@ function sameSecret(actual, expected) {
   return a.length === b.length && timingSafeEqual(a, b);
 }
 function publicMember(member) {
-  return { id: member.id, name: member.name, email: member.email, role: member.role, job_role: member.job_role || '' };
+  return { id: member.id, name: member.name, email: member.email, role: member.role, job_role: member.job_role || '', active: member.active !== false };
+}
+async function audit(db, { actorId = null, targetMemberId = null, action, entityType = 'system', entityId = null, before = null, after = null, metadata = {} }) {
+  const { error } = await db.from(TABLES.audit).insert({ actor_member_id: actorId, target_member_id: targetMemberId, action, entity_type: entityType, entity_id: entityId, before_values: before, after_values: after, metadata });
+  if (error) throw new Error('The change could not be recorded in the audit trail.');
 }
 function validateMember(name, email, password) {
   if (typeof name !== 'string' || !name.trim() || name.trim().length > 100) return 'Enter a name up to 100 characters.';
@@ -86,8 +94,8 @@ async function currentMember(db, request) {
     .select('member_id,expires_at').eq('token_hash', hashToken(token)).gt('expires_at', new Date().toISOString()).maybeSingle();
   if (sessionError || !session) return null;
   const { data: member, error } = await db.from(TABLES.members)
-    .select('id,name,email,role,job_role').eq('id', session.member_id).maybeSingle();
-  return error ? null : member;
+    .select('id,name,email,role,job_role,active').eq('id', session.member_id).maybeSingle();
+  return error || !member || member.active === false ? null : member;
 }
 
 function isAdmin(member) { return member?.role === 'admin'; }
@@ -116,7 +124,18 @@ async function handle(request, db, setupKey) {
   if (request.method === 'GET' && path === '/api/status') {
     const setupRequired = await getSetupStatus(db);
     const member = await currentMember(db, request);
-    return reply({ setup_required: setupRequired, setup_requires_key: true, member: member ? publicMember(member) : null });
+    return reply({ setup_required: setupRequired, setup_requires_key: true, google_sign_in_available: Boolean(process.env.SUPABASE_URL && publicSupabaseKey()), member: member ? publicMember(member) : null });
+  }
+  if (request.method === 'GET' && path === '/api/auth/google') {
+    const apiKey = publicSupabaseKey();
+    const supabaseUrl = process.env.SUPABASE_URL;
+    if (!apiKey || !supabaseUrl) return reply({ error: 'Google sign-in is not configured. Ask your administrator to finish the Supabase setup.' }, 503);
+    const redirectTo = new URL('/', request.url).toString();
+    const authorize = new URL('/auth/v1/authorize', supabaseUrl);
+    authorize.searchParams.set('provider', 'google');
+    authorize.searchParams.set('redirect_to', redirectTo);
+    authorize.searchParams.set('apikey', apiKey);
+    return new Response(null, { status: 302, headers: { Location: authorize.toString(), 'Cache-Control': 'no-store' } });
   }
   if (request.method === 'GET' && path === '/api/me') {
     const member = await currentMember(db, request);
@@ -148,7 +167,7 @@ async function handle(request, db, setupKey) {
     if (!validDate(start) || !validDate(end) || start > end) return reply({ error: 'Choose a valid reporting date range.' }, 400);
     let entriesQuery = db.from(TABLES.entries).select('*').gte('work_date', start).lte('work_date', end).order('started_at', { ascending: false }).limit(5000);
     if (!isAdmin(member)) entriesQuery = entriesQuery.eq('member_id', member.id);
-    const membersQuery = db.from(TABLES.members).select('id,name,email,role,job_role').order('name', { ascending: true });
+    const membersQuery = db.from(TABLES.members).select('id,name,email,role,job_role,active').order('name', { ascending: true });
     if (!isAdmin(member)) membersQuery.eq('id', member.id);
     let activeQuery = db.from(TABLES.entries).select('id,member_id,description,project,project_id,project_type,work_role,work_date,start_clock,started_at').is('ended_at', null);
     if (!isAdmin(member)) activeQuery = activeQuery.eq('member_id', member.id);
@@ -167,9 +186,23 @@ async function handle(request, db, setupKey) {
     }));
     const activeTimers = active.map((row) => ({ id: row.id, member_id: row.member_id, member_name: memberNames.get(row.member_id) || 'Team member', description: row.description, project: row.project, project_id: row.project_id || '', project_type: row.project_type || '', work_role: row.work_role || '', date: row.work_date, start: String(row.start_clock).slice(0, 5), started_at: Math.floor(new Date(row.started_at).getTime() / 1000) }));
     const timer = activeTimers.find((row) => row.member_id === member.id) || null;
-    return reply({ member: publicMember(member), members: users.map(publicMember), entries, timer, active_timers: activeTimers });
+    const entryIds = rows.map((row) => row.id);
+    let comments = [];
+    if (entryIds.length) {
+      const { data: notes, error: commentsError } = await db.from(TABLES.comments).select('id,entry_id,member_id,comment,created_at').in('entry_id', entryIds).order('created_at');
+      if (commentsError) return reply({ error: 'Could not load work updates.' }, 500);
+      comments = notes.map((note) => ({ ...note, member_name: memberNames.get(note.member_id) || 'Team member' }));
+    }
+    let auditLog = [];
+    if (isAdmin(member)) {
+      const endExclusive = new Date(`${end}T00:00:00.000Z`); endExclusive.setUTCDate(endExclusive.getUTCDate() + 1);
+      const { data: events, error: auditError } = await db.from(TABLES.audit).select('*').gte('created_at', `${start}T00:00:00.000Z`).lt('created_at', endExclusive.toISOString()).order('created_at', { ascending: false }).limit(5000);
+      if (auditError) return reply({ error: 'Could not load audit activity.' }, 500);
+      auditLog = events.map((event) => ({ ...event, actor_name: memberNames.get(event.actor_member_id) || 'System', target_member_name: memberNames.get(event.target_member_id) || '' }));
+    }
+    return reply({ member: publicMember(member), members: users.map(publicMember), entries, timer, active_timers: activeTimers, comments, audit_log: auditLog });
   }
-  if (!['POST', 'PATCH'].includes(request.method)) return reply({ error: 'Not found.' }, 404);
+  if (!['POST', 'PATCH', 'DELETE'].includes(request.method)) return reply({ error: 'Not found.' }, 404);
   if (!verifyOrigin(request)) return reply({ error: 'Request origin is not allowed.' }, 403);
 
   let body;
@@ -189,6 +222,7 @@ async function handle(request, db, setupKey) {
     }).select('id,name,email,role').single();
     if (error) return reply({ error: error.code === '23505' ? 'Workspace setup is already complete.' : 'Could not create the administrator account.' }, error.code === '23505' ? 409 : 500);
     const token = await createSession(db, admin.id);
+    await audit(db, { actorId: admin.id, targetMemberId: admin.id, action: 'workspace_admin_created', entityType: 'member', entityId: admin.id, after: { name: admin.name, email: admin.email, role: admin.role } });
     return reply({ member: publicMember(admin) }, 201, { 'Set-Cookie': cookieHeader(token) });
   }
 
@@ -198,17 +232,41 @@ async function handle(request, db, setupKey) {
     const { data: member, error } = await db.from(TABLES.members).select('*').eq('email', email).maybeSingle();
     const expected = member ? Buffer.from(member.password_hash, 'hex') : Buffer.alloc(32);
     const actual = pbkdf2Sync(password, member?.password_salt || '00000000000000000000000000000000', PASSWORD_ROUNDS, 32, 'sha256');
-    if (error || !member || expected.length !== actual.length || !timingSafeEqual(actual, expected)) {
+    if (error || !member || member.active === false || expected.length !== actual.length || !timingSafeEqual(actual, expected)) {
+      await audit(db, { action: 'login_failed', entityType: 'authentication', metadata: { email, reason: 'invalid_credentials_or_inactive_account' } });
       return reply({ error: 'Email or password is incorrect.' }, 401);
     }
     const token = await createSession(db, member.id);
+    await audit(db, { actorId: member.id, targetMemberId: member.id, action: 'login_succeeded', entityType: 'authentication' });
     return reply({ member: publicMember(member) }, 200, { 'Set-Cookie': cookieHeader(token) });
   }
 
   if (path === '/api/logout') {
     const token = parseCookies(request.headers.get('cookie'))[SESSION_COOKIE];
+    const signedIn = await currentMember(db, request);
     if (token) await db.from(TABLES.sessions).delete().eq('token_hash', hashToken(token));
+    if (signedIn) await audit(db, { actorId: signedIn.id, targetMemberId: signedIn.id, action: 'logout', entityType: 'authentication' });
     return reply({ ok: true }, 200, { 'Set-Cookie': cookieHeader('', 0) });
+  }
+
+  if (path === '/api/auth/google' && request.method === 'POST') {
+    const accessToken = typeof body.access_token === 'string' ? body.access_token : '';
+    if (!accessToken || accessToken.length > 16_384) return reply({ error: 'Google sign-in could not be completed. Try again.' }, 400);
+    const { data: authData, error: authError } = await db.auth.getUser(accessToken);
+    const googleUser = authData?.user;
+    if (authError || !googleUser?.email || !googleUser.email_confirmed_at || !(googleUser.app_metadata?.providers || []).includes('google')) {
+      await audit(db, { action: 'google_login_failed', entityType: 'authentication', metadata: { reason: 'provider_identity_not_verified' } });
+      return reply({ error: 'Google could not verify this account. Try again or use your work email and password.' }, 401);
+    }
+    const { data: member, error } = await db.from(TABLES.members).select('id,name,email,role,job_role,active')
+      .eq('email', googleUser.email.trim().toLowerCase()).eq('active', true).maybeSingle();
+    if (error || !member) {
+      await audit(db, { action: 'google_login_denied', entityType: 'authentication', metadata: { email: googleUser.email.trim().toLowerCase(), reason: 'no_active_member_profile' } });
+      return reply({ error: 'This Google email is not on your team account yet. Ask your administrator to create your profile first.' }, 403);
+    }
+    const token = await createSession(db, member.id);
+    await audit(db, { actorId: member.id, targetMemberId: member.id, action: 'google_login_succeeded', entityType: 'authentication' });
+    return reply({ member: publicMember(member) }, 200, { 'Set-Cookie': cookieHeader(token) });
   }
 
   const member = await currentMember(db, request);
@@ -229,7 +287,51 @@ async function handle(request, db, setupKey) {
     }
     const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', member.id).select('id,name,email,role,job_role').single();
     if (error) return reply({ error: error.code === '23505' ? 'That email address is already in use.' : 'Could not update your profile.' }, error.code === '23505' ? 409 : 500);
+    await audit(db, { actorId: member.id, targetMemberId: member.id, action: 'profile_updated', entityType: 'member', entityId: member.id, before: { name: member.name, email: member.email }, after: { name: updated.name, email: updated.email } });
     return reply({ member: publicMember(updated) });
+  }
+
+  const commentMatch = path.match(/^\/api\/entries\/([0-9a-f-]{36})\/comments$/i);
+  if (commentMatch && request.method === 'POST') {
+    const { data: entry, error: entryError } = await db.from(TABLES.entries).select('id,member_id').eq('id', commentMatch[1]).maybeSingle();
+    if (entryError || !entry || (!isAdmin(member) && entry.member_id !== member.id)) return reply({ error: 'You can only add updates to your own work sessions.' }, 403);
+    const comment = String(body.comment || '').trim();
+    if (!comment || comment.length > 2000) return reply({ error: 'Enter an update of up to 2,000 characters.' }, 400);
+    const { data: note, error } = await db.from(TABLES.comments).insert({ entry_id: entry.id, member_id: member.id, comment }).select('id,entry_id,member_id,comment,created_at').single();
+    if (error) return reply({ error: 'Could not save your update.' }, 500);
+    await audit(db, { actorId: member.id, targetMemberId: entry.member_id, action: 'comment_added', entityType: 'entry_comment', entityId: note.id, after: { comment }, metadata: { entry_id: entry.id } });
+    return reply({ comment: { ...note, member_name: member.name } }, 201);
+  }
+
+  const adminEntryMatch = path.match(/^\/api\/admin\/entries\/([0-9a-f-]{36})$/i);
+  if (adminEntryMatch && (request.method === 'PATCH' || request.method === 'DELETE')) {
+    if (!isAdmin(member)) return reply({ error: 'Only an administrator can edit or delete timesheet records.' }, 403);
+    const { data: prior, error: readError } = await db.from(TABLES.entries).select('*').eq('id', adminEntryMatch[1]).maybeSingle();
+    if (readError || !prior) return reply({ error: 'Timesheet record not found.' }, 404);
+    if (request.method === 'DELETE') {
+      if (prior.ended_at === null) return reply({ error: 'Stop the active timer before deleting its record.' }, 409);
+      const { error } = await db.from(TABLES.entries).delete().eq('id', prior.id);
+      if (error) return reply({ error: 'Could not delete the timesheet record.' }, 500);
+      await audit(db, { actorId: member.id, targetMemberId: prior.member_id, action: 'timesheet_deleted', entityType: 'timesheet', entityId: prior.id, before: prior });
+      return reply({ ok: true });
+    }
+    const description = String(body.description ?? prior.description).trim().slice(0, 160);
+    const project = String(body.project ?? prior.project).trim();
+    const projectId = String(body.project_id ?? prior.project_id).trim();
+    const projectType = String(body.project_type ?? prior.project_type).trim();
+    const workRole = String(body.work_role ?? prior.work_role).trim();
+    const workDate = body.date ?? prior.work_date;
+    const start = body.start ?? String(prior.start_clock).slice(0, 5);
+    const minutes = Number(body.duration_minutes ?? Math.round((prior.seconds || 0) / 60));
+    if (!description || !project || !projectId || !projectType || !workRole || !validDate(workDate) || !/^([01]\d|2[0-3]):[0-5]\d$/.test(start) || !Number.isInteger(minutes) || minutes < 1 || minutes > 1440) return reply({ error: 'Enter a valid date, start time, duration, project, and work role.' }, 400);
+    if (prior.ended_at === null) return reply({ error: 'Stop the active timer before editing its timesheet record.' }, 409);
+    const startedAt = new Date(`${workDate}T${start}:00+02:00`);
+    const endedAt = new Date(startedAt.getTime() + minutes * 60_000);
+    const update = { description, project, project_id: projectId, project_type: projectType, work_role: workRole, work_date: workDate, start_clock: `${start}:00`, started_at: startedAt.toISOString(), ended_at: endedAt.toISOString(), seconds: minutes * 60 };
+    const { data: updated, error } = await db.from(TABLES.entries).update(update).eq('id', prior.id).select('*').single();
+    if (error) return reply({ error: 'Could not update the timesheet record.' }, 500);
+    await audit(db, { actorId: member.id, targetMemberId: prior.member_id, action: 'timesheet_updated', entityType: 'timesheet', entityId: prior.id, before: prior, after: updated });
+    return reply({ ok: true });
   }
 
   if (path === '/api/timer/start') {
@@ -251,6 +353,7 @@ async function handle(request, db, setupKey) {
       start_clock: `${start}:00`, started_at: new Date().toISOString(),
     }).select('id').single();
     if (error) return reply({ error: error.code === '23505' ? 'You already have a timer running. Stop it before starting another.' : 'Could not start the timer.' }, error.code === '23505' ? 409 : 500);
+    await audit(db, { actorId: member.id, targetMemberId: member.id, action: 'clock_in', entityType: 'timesheet', entityId: entry.id, after: { project, project_id: projectId, project_type: projectType, work_role: workRole, work_date: workDate, start } });
     return reply({ ok: true, id: entry.id }, 201);
   }
 
@@ -263,6 +366,7 @@ async function handle(request, db, setupKey) {
     const { data: stopped, error } = await db.from(TABLES.entries).update({ ended_at: endedAt.toISOString(), seconds })
       .eq('id', entry.id).is('ended_at', null).select('id').maybeSingle();
     if (error || !stopped) return reply({ error: 'The timer was already stopped.' }, 409);
+    await audit(db, { actorId: member.id, targetMemberId: member.id, action: 'clock_out', entityType: 'timesheet', entityId: entry.id, after: { ended_at: endedAt.toISOString(), seconds } });
     return reply({ ok: true, seconds });
   }
 
@@ -278,7 +382,26 @@ async function handle(request, db, setupKey) {
       job_role: jobRole, password_salt: salt, password_hash: passwordHash(body.password, salt),
     }).select('id').single();
     if (error) return reply({ error: error.code === '23505' ? 'That email already has an account.' : 'Could not create the team member account.' }, error.code === '23505' ? 409 : 500);
+    await audit(db, { actorId: member.id, targetMemberId: created.id, action: 'member_created', entityType: 'member', entityId: created.id, after: { name: body.name.trim(), email: body.email.trim().toLowerCase(), role: 'member', job_role: jobRole, active: true } });
     return reply({ ok: true, id: created.id }, 201);
+  }
+  const adminMemberMatch = path.match(/^\/api\/admin\/members\/([0-9a-f-]{36})$/i);
+  if (adminMemberMatch && request.method === 'PATCH') {
+    if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage team accounts.' }, 403);
+    const { data: prior, error: readError } = await db.from(TABLES.members).select('id,name,email,role,job_role,active').eq('id', adminMemberMatch[1]).maybeSingle();
+    if (readError || !prior || prior.role === 'admin') return reply({ error: 'Team member account not found.' }, 404);
+    const update = {};
+    if (typeof body.name === 'string') update.name = body.name.trim();
+    if (typeof body.email === 'string') update.email = body.email.trim().toLowerCase();
+    if (typeof body.job_role === 'string') update.job_role = body.job_role.trim();
+    if (typeof body.active === 'boolean') update.active = body.active;
+    if ((update.name !== undefined && (!update.name || update.name.length > 100)) || (update.email !== undefined && (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(update.email) || update.email.length > 254))) return reply({ error: 'Enter a valid name and work email.' }, 400);
+    if (update.job_role && !await activeCatalogItem(db, TABLES.roles, update.job_role)) return reply({ error: 'Choose an active work role from the list.' }, 400);
+    if (!Object.keys(update).length) return reply({ error: 'Choose a profile field to update.' }, 400);
+    const { data: updated, error } = await db.from(TABLES.members).update(update).eq('id', prior.id).select('id,name,email,role,job_role,active').single();
+    if (error) return reply({ error: error.code === '23505' ? 'That email is already in use.' : 'Could not update this account.' }, error.code === '23505' ? 409 : 500);
+    await audit(db, { actorId: member.id, targetMemberId: prior.id, action: update.active === false ? 'member_deactivated' : update.active === true ? 'member_reactivated' : 'member_profile_updated', entityType: 'member', entityId: prior.id, before: prior, after: updated });
+    return reply({ member: publicMember(updated) });
   }
   if (path === '/api/admin/projects' && request.method === 'POST') {
     if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage projects.' }, 403);
@@ -287,6 +410,7 @@ async function handle(request, db, setupKey) {
     if (!name || name.length > 100 || !projectType || projectType.length > 80) return reply({ error: 'Enter a project name and project type.' }, 400);
     const { data: project, error } = await db.from(TABLES.projects).insert({ name, project_type: projectType, active: true }).select('id,name,project_type,active').single();
     if (error) return reply({ error: error.code === '23505' ? 'A project with that name already exists.' : 'Could not add the project.' }, error.code === '23505' ? 409 : 500);
+    await audit(db, { actorId: member.id, action: 'project_created', entityType: 'project', entityId: project.id, after: project });
     return reply({ project }, 201);
   }
   if (path === '/api/admin/roles' && request.method === 'POST') {
@@ -295,16 +419,29 @@ async function handle(request, db, setupKey) {
     if (!name || name.length > 80) return reply({ error: 'Enter a work role up to 80 characters.' }, 400);
     const { data: role, error } = await db.from(TABLES.roles).insert({ name, active: true }).select('id,name,active').single();
     if (error) return reply({ error: error.code === '23505' ? 'That work role already exists.' : 'Could not add the work role.' }, error.code === '23505' ? 409 : 500);
+    await audit(db, { actorId: member.id, action: 'role_created', entityType: 'work_role', entityId: role.id, after: role });
     return reply({ role }, 201);
   }
   const catalogMatch = path.match(/^\/api\/admin\/(projects|roles)\/([0-9a-f-]{36})$/i);
   if (catalogMatch && request.method === 'PATCH') {
     if (!isAdmin(member)) return reply({ error: 'Only an administrator can manage project and role options.' }, 403);
-    if (typeof body.active !== 'boolean') return reply({ error: 'Choose whether this option is active.' }, 400);
     const table = catalogMatch[1] === 'projects' ? TABLES.projects : TABLES.roles;
-    const { data: updated, error } = await db.from(table).update({ active: body.active }).eq('id', catalogMatch[2]).select('id,active').maybeSingle();
+    const { data: prior, error: readError } = await db.from(table).select('*').eq('id', catalogMatch[2]).maybeSingle();
+    if (readError || !prior) return reply({ error: 'That option could not be found.' }, 404);
+    const update = {};
+    if (typeof body.active === 'boolean') update.active = body.active;
+    if (catalogMatch[1] === 'projects') {
+      if (typeof body.name === 'string') update.name = body.name.trim();
+      if (typeof body.project_type === 'string') update.project_type = body.project_type.trim();
+      if ((update.name !== undefined && (!update.name || update.name.length > 100)) || (update.project_type !== undefined && (!update.project_type || update.project_type.length > 80))) return reply({ error: 'Enter a project name and project type.' }, 400);
+    } else if (typeof body.name === 'string') update.name = body.name.trim();
+    if (catalogMatch[1] === 'roles' && update.name !== undefined && (!update.name || update.name.length > 80)) return reply({ error: 'Enter a role name up to 80 characters.' }, 400);
+    if (!Object.keys(update).length) return reply({ error: 'Choose a project or role setting to update.' }, 400);
+    const { data: updated, error } = await db.from(table).update(update).eq('id', catalogMatch[2]).select('*').maybeSingle();
     if (error || !updated) return reply({ error: 'Could not update that option.' }, 404);
-    return reply({ ok: true, active: updated.active });
+    const entityType = catalogMatch[1] === 'projects' ? 'project' : 'work_role';
+    await audit(db, { actorId: member.id, action: update.active !== undefined ? `${entityType}_${body.active ? 'restored' : 'archived'}` : `${entityType}_updated`, entityType, entityId: catalogMatch[2], before: prior, after: updated });
+    return reply({ ok: true, item: { id: updated.id, name: updated.name, active: updated.active, project_type: updated.project_type } });
   }
   return reply({ error: 'Not found.' }, 404);
 }
@@ -321,4 +458,5 @@ export default async function handler(request) {
 }
 
 export const config = { path: '/api/*' };
+
 
